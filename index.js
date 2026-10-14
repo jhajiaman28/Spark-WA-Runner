@@ -257,6 +257,45 @@ Guidelines:
 - Never write filler, corporate buzzwords, or meta-announcements. Answer directly and substantively.
 `;
 
+let cachedModelName = null;
+
+async function getAvailableModel(apiKey) {
+  if (cachedModelName) return cachedModelName;
+  try {
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const data = await res.json();
+
+    if (data.models && Array.isArray(data.models)) {
+      const generateModels = data.models
+        .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+        .map(m => m.name.replace('models/', ''));
+
+      console.log('[Gemini] Models enabled for your key:', generateModels);
+
+      // Prioritize fast, high-quality models
+      const preferred =
+        generateModels.find(m => m === 'gemini-1.5-flash') ||
+        generateModels.find(m => m.includes('1.5-flash')) ||
+        generateModels.find(m => m.includes('1.5-pro')) ||
+        generateModels.find(m => m.includes('gemini-pro')) ||
+        generateModels[0];
+
+      if (preferred) {
+        cachedModelName = preferred;
+        console.log(`[Gemini] Selected model: ${cachedModelName}`);
+        return cachedModelName;
+      }
+    } else if (data.error) {
+      console.error('[Gemini ListModels Error]', data.error);
+    }
+  } catch (err) {
+    console.error('[Gemini ListModels Network Error]', err.message);
+  }
+
+  // Safe fallback
+  return 'gemini-1.5-flash';
+}
+
 async function queryGemini(prompt, isSparkPersona = false) {
   const rawKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
   const apiKey = rawKey.replace(/["']/g, '').trim();
@@ -270,50 +309,41 @@ async function queryGemini(prompt, isSparkPersona = false) {
     ? `${systemInstruction}\n\nUser Question: ${prompt}`
     : prompt;
 
-  const candidateModels = [
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-latest',
-    'gemini-1.5-pro',
-    'gemini-2.0-flash-exp'
-  ];
+  try {
+    const model = await getAvailableModel(apiKey);
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  let lastErrorDetail = '';
+    const res = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        contents: [{ parts: [{ text: userText }] }],
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 1000
+        }
+      })
+    });
 
-  for (const model of candidateModels) {
-    try {
-      const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          contents: [{ parts: [{ text: userText }] }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 1000
-          }
-        })
-      });
+    const data = await res.json();
 
-      const data = await res.json();
-
-      if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-        return data.candidates[0].content.parts[0].text.trim();
-      }
-
-      if (data.error) {
-        lastErrorDetail = `${data.error.message} (Status: ${data.error.status || data.error.code})`;
-        console.error(`[Gemini ${model} Error]`, data.error);
-      } else if (data.candidates && data.candidates[0]?.finishReason) {
-        lastErrorDetail = `Generation stopped: ${data.candidates[0].finishReason}`;
-      }
-    } catch (networkErr) {
-      lastErrorDetail = networkErr.message;
+    if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+      return data.candidates[0].content.parts[0].text.trim();
     }
+
+    if (data.error) {
+      return `⚠️ Gemini API Error (${model}): ${data.error.message}`;
+    }
+
+    if (data.candidates && data.candidates[0]?.finishReason) {
+      return `⚠️ Blocked by filter: ${data.candidates[0].finishReason}`;
+    }
+
+    return `⚠️ Unexpected response from model ${model}.`;
+  } catch (err) {
+    return `⚠️ AI Error: ${err.message}`;
   }
-
-  return `⚠️ AI Error: ${lastErrorDetail}`;
 }
-
 function extractTextFromMessage(message) {
   if (!message) return '';
   const m =
