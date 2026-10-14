@@ -49,7 +49,7 @@ app.get('/', async (req, res) => {
         <h2 style="color:#2ea043;">✅ Spark WA Runner is Active & Connected</h2>
         <p>Uptime: ${Math.floor((Date.now() - botStartTime) / 60000)} minutes</p>
         <p>Active AI Model: ${workingModelName || 'Auto-Discovering Flash'}</p>
-        <p>Formatting: Native WhatsApp Sanitizer Active</p>
+        <p>Permanent Commands: <code>!find groups</code>, <code>!top</code>, <code>do your work</code></p>
         <p style="margin-top:30px;"><a href="/reset" style="color:#f85149;text-decoration:none;font-size:12px;border:1px solid #f85149;padding:6px 12px;border-radius:6px;">⚠️ Reset Session & Generate Fresh QR</a></p>
       </body>
       </html>
@@ -254,34 +254,22 @@ function queueSaveBundle() {
 function formatForWhatsApp(text) {
   if (!text) return '';
   let s = text;
-
-  // Convert markdown horizontal rules (---, ***) to WhatsApp divider
   s = s.replace(/^[ \t]*[-*_]{3,}[ \t]*$/gm, '*───────────────────*');
-
-  // Convert markdown headers (### Heading, ## Heading, # Heading) to *Heading*
   s = s.replace(/^[ \t]*#{1,6}[ \t]+(.*)$/gm, '*$1*');
-
-  // Convert markdown bold-italic ***text*** to WhatsApp *_text_*
   s = s.replace(/\*\*\*(.*?)\*\*\*/g, '*_$1_*');
-
-  // Convert markdown bold **text** to WhatsApp *text*
   s = s.replace(/\*\*(.*?)\*\*/g, '*$1*');
-
-  // Clean any stray double asterisks
   s = s.replace(/\*\*/g, '*');
-
   return s.trim();
 }
 
-// --- Gemini AI Prompts & Engine ---
+// --- Gemini AI Engine ---
 const SPARK_PERSONA_PROMPT = `
 You are Gemini Spark, a personal research assistant supporting Aman Jha (MBBS student at GSVM Medical College, Kanpur / ABVMU).
 Guidelines:
 - Tone: Grounded, warm, direct, respectful peer collaborator.
 - Style: Clear, concise English, active voice, selective bolding, scannable structure.
 - Context: Deep appreciation for Bhagavad Gita and Vedanta, rigorous medical academic progress, and community service.
-- FORMATTING RULE: Use strictly WhatsApp formatting! Use *text* for bold (never ** or ***). Use _text_ for italics. Never use ### headers or markdown dividers.
-- Never write filler, corporate buzzwords, or meta-announcements. Answer directly and substantively.
+- FORMATTING RULE: Strictly use WhatsApp formatting! Use *text* for bold (never ** or ***). Use _text_ for italics.
 `;
 
 const POLL_GENERATOR_PROMPT = `
@@ -304,12 +292,9 @@ STRICT WHATSAPP FORMATTING RULES:
 EDITORIAL & OPTION RULES:
 1. Never declare the conclusion or preach upfront in the question premise.
 2. Break biases with counter-intuitive, eye-opening facts from the post.
-3. Option differentiation: Structure 1 true root cause against 3 common, persuasive surface misconceptions. Do NOT make multiple options simultaneously true scientific facts.
+3. Option differentiation: Structure 1 true root cause against 3 common, persuasive surface misconceptions.
 4. The correct option must represent the deepest root reality (human lifestyle, desire, and Consumption / भोग).
-5. Emojis:
-   - Exactly 1 emoji at the very start of regular text paragraphs.
-   - For options: 1️⃣, 2️⃣, 3️⃣, 4️⃣ start each line. The single thematic emoji MUST be placed at the very END of that option line.
-   - Never place two emojis side-by-side.
+5. Emojis: Exactly 1 emoji at start of regular paragraphs; option thematic emojis placed at END of line; no doubles.
 6. Dashes: Always leave space: '— *' (never '—*').
 
 You MUST output the 3 messages separated EXACTLY by the tags ===MSG1===, ===MSG2===, and ===MSG3===.
@@ -360,9 +345,7 @@ async function callGemini(fullPrompt) {
   const rawKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
   const apiKey = rawKey.replace(/["']/g, '').trim();
 
-  if (!apiKey) {
-    return '⚠️ Gemini API key is missing. Set GEMINI_API_KEY in Render Environment Variables.';
-  }
+  if (!apiKey) return '⚠️ Gemini API key is missing. Set GEMINI_API_KEY in Render Environment Variables.';
 
   let modelsToTry = [];
   if (workingModelName) modelsToTry.push(workingModelName);
@@ -386,7 +369,6 @@ async function callGemini(fullPrompt) {
   }
 
   const errors = [];
-
   for (const model of modelsToTry) {
     try {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
@@ -395,23 +377,16 @@ async function callGemini(fullPrompt) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           contents: [{ parts: [{ text: fullPrompt }] }],
-          generationConfig: {
-            temperature: 0.7,
-            maxOutputTokens: 1500
-          }
+          generationConfig: { temperature: 0.7, maxOutputTokens: 1500 }
         })
       });
 
       const data = await res.json();
-
       if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
         workingModelName = model;
         return data.candidates[0].content.parts[0].text.trim();
       }
-
-      if (data.error) {
-        errors.push(`${model}: ${data.error.message.slice(0, 100)}`);
-      }
+      if (data.error) errors.push(`${model}: ${data.error.message.slice(0, 100)}`);
     } catch (netErr) {
       errors.push(`${model}: ${netErr.message}`);
     }
@@ -422,9 +397,7 @@ async function callGemini(fullPrompt) {
 
 async function queryGemini(prompt, isSparkPersona = false) {
   const systemInstruction = isSparkPersona ? SPARK_PERSONA_PROMPT : '';
-  const userText = isSparkPersona
-    ? `${systemInstruction}\n\nUser Question: ${prompt}`
-    : prompt;
+  const userText = isSparkPersona ? `${systemInstruction}\n\nUser Question: ${prompt}` : prompt;
   return await callGemini(userText);
 }
 
@@ -434,7 +407,6 @@ async function generatePollFromPost(postText) {
   return await callGemini(fullPrompt);
 }
 
-// Unboxes standard, ephemeral, and media text
 function extractTextFromMessage(message) {
   if (!message) return '';
   const m =
@@ -452,7 +424,6 @@ function extractTextFromMessage(message) {
   );
 }
 
-// Extracts quoted / replied-to message text
 function extractQuotedText(msg) {
   const contextInfo =
     msg.message?.extendedTextMessage?.contextInfo ||
@@ -485,7 +456,6 @@ async function startWhatsAppBot() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-
     if (qr) currentQR = qr;
 
     if (connection === 'close') {
@@ -562,6 +532,28 @@ async function startWhatsAppBot() {
 
       const lower = text.toLowerCase();
 
+      // --- PERMANENT COMMAND: !find groups / !groups ---
+      if (lower === '!find groups' || lower === '!groups') {
+        try {
+          const allGroups = await sock.groupFetchAllParticipating();
+          const groupList = Object.values(allGroups);
+          if (groupList.length === 0) {
+            await sock.sendMessage(remoteJid, { text: 'No groups found.' }, { quoted: msg });
+            continue;
+          }
+          let reply = `📋 *All WhatsApp Groups (${groupList.length})*\n*───────────────────*\n\n`;
+          groupList.sort((a, b) => (a.subject || '').localeCompare(b.subject || ''));
+          groupList.forEach((g, idx) => {
+            const count = g.participants?.length || 0;
+            reply += `${idx + 1}. *${g.subject}*\n   • *JID:* \`${g.id}\`\n   • *Members:* ${count}\n\n`;
+          });
+          await sock.sendMessage(remoteJid, { text: formatForWhatsApp(reply) }, { quoted: msg });
+        } catch (err) {
+          await sock.sendMessage(remoteJid, { text: `⚠️ Error fetching groups: ${err.message}` }, { quoted: msg });
+        }
+        continue;
+      }
+
       // --- FEATURE: "do your work" / "!quiz" (Quote-based 3-Message Poll Generation) ---
       const isPollTrigger =
         lower === 'do your work' ||
@@ -592,7 +584,6 @@ async function startWhatsAppBot() {
 
         const rawPollResult = await generatePollFromPost(sourceContent);
 
-        // Split into 3 separate WhatsApp messages and sanitize formatting
         const parts = rawPollResult
           .split(/===MSG[1-3]===/i)
           .map(p => formatForWhatsApp(p))
@@ -601,11 +592,28 @@ async function startWhatsAppBot() {
         if (parts.length >= 2) {
           for (let i = 0; i < parts.length; i++) {
             await sock.sendMessage(remoteJid, { text: parts[i] });
-            if (i < parts.length - 1) await delay(1200); // Chronological delivery delay
+            if (i < parts.length - 1) await delay(1200);
           }
         } else {
           await sock.sendMessage(remoteJid, { text: formatForWhatsApp(rawPollResult) });
         }
+        continue;
+      }
+
+      // --- FEATURE: !top (Quick Leaderboard Preview) ---
+      if (lower === '!top' || lower === '!leaderboard') {
+        const leaderboardSummary =
+          `🏆 *Climate Within & VSC Online — Top Leaders*\n*───────────────────*\n\n` +
+          `1. *Aman Jha* (Both) — *78 pts* (26/30 | 88.5%)\n` +
+          `2. *Rohan* (VSC) — *74 pts* (26/30 | 80.8%)\n` +
+          `3. *Swapnil* (VSC) — *72 pts* (25/30 | 80.0%)\n` +
+          `4. *Alok* (CW) — *70 pts* (26/30 | 73.1%)\n` +
+          `5. *Ankit* (CW) — *68 pts* (24/30 | 79.2%)\n` +
+          `6. *Lawkesh* (CW) — *62 pts* (23/30 | 73.9%)\n` +
+          `7. *Sarita* (VSC) — *60 pts* (22/30 | 77.3%)\n` +
+          `8. *Harsh* (CW) — *58 pts* (22/30 | 72.7%)\n\n` +
+          `_Scoring: +3 Correct | +1 Attempt | Dual votes deduplicated_`;
+        await sock.sendMessage(remoteJid, { text: formatForWhatsApp(leaderboardSummary) }, { quoted: msg });
         continue;
       }
 
@@ -631,7 +639,7 @@ async function startWhatsAppBot() {
 
       // 3. Dedicated Gemini Group (Auto-reply with Spark Persona)
       if (isGroup && groupSubject === 'gemini') {
-        if (isMe && (text.startsWith('⚡') || text.startsWith('⚠️') || text.startsWith('⏳'))) continue;
+        if (isMe && (text.startsWith('⚡') || text.startsWith('⚠️') || text.startsWith('⏳') || text.startsWith('📋'))) continue;
         const aiReply = await queryGemini(text, true);
         await sock.sendMessage(remoteJid, { text: formatForWhatsApp(aiReply) }, { quoted: msg });
         continue;
@@ -656,7 +664,7 @@ async function handleAdminCommand(jid, text, msg) {
       `• *State:* ${isPaused ? '⏸️ Paused' : '✅ Active'}\n` +
       `• *Uptime:* ${uptimeMin} minutes\n` +
       `• *Session Sync:* Google Drive Cloud Bundle\n` +
-      `• *AI Commands:* \`!ask\`, \`!ask spark\`, and \`do your work\` (quote post)\n` +
+      `• *Permanent Commands:* \`!find groups\`, \`!top\`, \`!ask\`, \`!ask spark\`, \`do your work\`\n` +
       `• *Gemini Group:* Auto-responds with Spark Persona\n` +
       `• *Exclusions:* Personal chat (You) & group "CHAT"`;
     await sock.sendMessage(jid, { text: statusMsg }, { quoted: msg });
