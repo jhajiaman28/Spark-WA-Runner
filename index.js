@@ -7,7 +7,7 @@ const https = require('https');
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Credentials read privately from Render Environment Variables
+// Configuration
 const CLIENT_ID = process.env.CLIENT_ID;
 const CLIENT_SECRET = process.env.CLIENT_SECRET;
 const REFRESH_TOKEN = process.env.GOOGLE_REFRESH_TOKEN;
@@ -17,23 +17,27 @@ const VSC_SHEET_ID = process.env.VSC_ACADEMICS_SHEET_ID || "1b2zj-Fx8LPgtyGjM1vl
 let currentQR = null;
 let connectionStatus = 'Connecting...';
 let syncLogs = [];
+let botActive = true; // Emergency Stop Toggle
 
 function logActivity(text) {
     const time = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata' });
     syncLogs.unshift(`[${time}] ${text}`);
-    if (syncLogs.length > 20) syncLogs.pop();
+    if (syncLogs.length > 25) syncLogs.pop();
     console.log(`[${time}] ${text}`);
 }
 
-// Web Dashboard on Render
+// Web Dashboard
 app.get('/', async (req, res) => {
     if (connectionStatus === 'Connected') {
-        const logHtml = syncLogs.map(l => `<li style="margin-bottom: 5px;">${l}</li>`).join('') || '<li>Waiting for incoming polls or messages...</li>';
+        const logHtml = syncLogs.map(l => `<li style="margin-bottom: 5px;">${l}</li>`).join('') || '<li>Waiting for commands or polls...</li>';
         return res.send(`
             <body style="font-family: sans-serif; max-width: 800px; margin: 40px auto; padding: 0 20px;">
-                <h1 style="color: #166534;">✅ Spark WhatsApp Runner is Live 24/7</h1>
-                <p><b>Connected Sheets:</b> CW Gita Community Attendance (47 Members) &amp; VSC Academics (13 Students)</p>
-                <h3>Recent Live Sync Activity:</h3>
+                <h1 style="color: ${botActive ? '#166534' : '#991B1B'};">
+                    ${botActive ? '✅ Spark WhatsApp Runner is Active' : '🛑 Spark Runner is PAUSED (Emergency Stop)'}
+                </h1>
+                <p><b>Status:</b> ${botActive ? 'Running normally (Listening to polls & commands)' : 'All automated broadcasts and sheet syncs are halted.'}</p>
+                <p><b>Admin Commands:</b> <code>!stop</code> to pause | <code>!resume</code> to reactivate | <code>!poll gita</code> | <code>!poll vsc</code></p>
+                <h3>Live Execution Logs:</h3>
                 <ul style="background: #f4f4f5; padding: 20px 30px; border-radius: 8px; font-family: monospace; font-size: 13px;">${logHtml}</ul>
                 <script>setTimeout(() => location.reload(), 15000);</script>
             </body>
@@ -46,9 +50,9 @@ app.get('/', async (req, res) => {
     res.send(`<body style="font-family: sans-serif; text-align: center; padding-top: 40px;"><h2>Scan with WhatsApp</h2><img src="${qrImage}" style="width: 320px; height: 320px;" /><script>setTimeout(() => location.reload(), 20000);</script></body>`);
 });
 
-app.listen(PORT, () => logActivity(`Web dashboard active on port ${PORT}`));
+app.listen(PORT, () => logActivity(`Web dashboard listening on port ${PORT}`));
 
-// Google Sheets API Helpers
+// Google Sheets Token Refresher
 function getGoogleAccessToken() {
     return new Promise((resolve, reject) => {
         const postData = `client_id=${CLIENT_ID}&client_secret=${CLIENT_SECRET}&refresh_token=${REFRESH_TOKEN}&grant_type=refresh_token`;
@@ -89,7 +93,6 @@ async function sheetsApi(sheetId, endpoint, method = 'GET', body = null) {
     });
 }
 
-// 47 Registered Members Roster
 const GITA_MEMBERS = [
     'Alok', 'Aman', 'Amit', 'Anchal', 'Anisha', 'Anjali', 'Anju', 'Ankit', 'Anshu', 'Anurag',
     'Archana', 'Ayush', 'Bhuwan', 'Chhavi', 'Deva', 'Estuti', 'Garima', 'Harsh', 'Himanshu', 'Jyoti',
@@ -98,7 +101,6 @@ const GITA_MEMBERS = [
     'Shiv', 'Shivam', 'Shubham', 'Shweta', 'Swapnil', 'Utkarsh', 'Vikas'
 ];
 
-// Start WhatsApp Client
 async function startBot() {
     const { state, saveCreds } = await useMultiFileAuthState('auth_session');
     const sock = makeWASocket({
@@ -115,7 +117,7 @@ async function startBot() {
         if (connection === 'open') {
             connectionStatus = 'Connected';
             currentQR = null;
-            logActivity('🎉 WhatsApp connected & actively listening to groups!');
+            logActivity('🎉 WhatsApp connected & live!');
         } else if (connection === 'close') {
             connectionStatus = 'Disconnected';
             const shouldReconnect = lastDisconnect?.error?.output?.statusCode !== DisconnectReason.loggedOut;
@@ -123,14 +125,65 @@ async function startBot() {
         }
     });
 
-    // Message & Command Listener
     sock.ev.on('messages.upsert', async ({ messages }) => {
         const msg = messages[0];
         if (!msg.message) return;
-        const text = msg.message.conversation || msg.message.extendedTextMessage?.text || '';
-        const sender = msg.key.participant || msg.key.remoteJid;
+        const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
+        const chatJid = msg.key.remoteJid;
 
-        // 1. Natural Attendance Claims (e.g., "Ankit present, Anurag absent")
+        // 1. Emergency Stop Controls
+        if (text === '!stop' || text === '!pause') {
+            botActive = false;
+            logActivity('🛑 EMERGENCY STOP ACTIVATED: Bot operations paused.');
+            await sock.sendMessage(chatJid, { text: '🛑 *EMERGENCY STOP ACTIVATED*\nAll automated polling, message relays, and sheet syncing are paused.\nSend `!resume` to reactivate.' }, { quoted: msg });
+            return;
+        }
+
+        if (text === '!resume' || text === '!start') {
+            botActive = true;
+            logActivity('✅ Bot operations resumed.');
+            await sock.sendMessage(chatJid, { text: '✅ *Bot Resumed*: All automated polling, message relays, and sheet syncing are active.' }, { quoted: msg });
+            return;
+        }
+
+        if (!botActive) return; // If stopped, ignore remaining triggers
+
+        // 2. Poll Dispatch Commands
+        if (text === '!poll gita') {
+            const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Asia/Kolkata' });
+            const pollMsg = await sock.sendMessage(chatJid, {
+                poll: {
+                    name: `${dateStr} - Gita Community Attendance`,
+                    values: ['Joined ✅', 'Absent ❌'],
+                    selectableCount: 1
+                }
+            });
+            logActivity(`Dispatched Gita Attendance Poll for ${dateStr}`);
+            // Pin the poll for 24 hours
+            try {
+                await sock.sendMessage(chatJid, { pin: pollMsg.key, type: 1, time: 86400 });
+                logActivity('Pinned attendance poll to chat header (24h).');
+            } catch (e) { console.log('Pinning notice:', e.message); }
+            return;
+        }
+
+        if (text === '!poll vsc') {
+            const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+            const template = `*${dateStr} ➖ Study Tracker* 📚\n\n1. Rohan -\n2. Swapnil -\n3. Anurag -\n4. Pooja -\n5. Saksham -\n6. Himanshu -\n7. Raghuvansh -\n8. Amit -\n9. Aman -\n10. Anisha -\n11. Sahiba -\n12. Sarita -\n13. Muskan -`;
+            await sock.sendMessage(chatJid, { text: template });
+            logActivity(`Dispatched VSC Study Tracker Template for ${dateStr}`);
+            return;
+        }
+
+        // 3. Status Report
+        if (text === '!status' || text === '!report') {
+            const rowData = (await sheetsApi(GITA_SHEET_ID, '/values/Attendance!E45:AZ45')).values?.[0] || [];
+            const summary = rowData[0] || 'No attendance logged yet for today.';
+            await sock.sendMessage(chatJid, { text: `📊 *Current Attendance Status:*\n${summary}\n\n*Bot Engine Status:* ${botActive ? 'Active ✅' : 'Paused 🛑'}` }, { quoted: msg });
+            return;
+        }
+
+        // 4. Natural Attendance Claims (e.g., "Ankit present, Anurag absent")
         if (text.toLowerCase().includes('present') || text.toLowerCase().includes('absent')) {
             const updates = {};
             text.split(/[,;\n]/).forEach(part => {
@@ -144,45 +197,14 @@ async function startBot() {
             });
 
             if (Object.keys(updates).length > 0) {
-                logActivity(`Detected attendance update from chat: ${JSON.stringify(updates)}`);
+                logActivity(`Attendance update detected: ${JSON.stringify(updates)}`);
                 const currentVals = (await sheetsApi(GITA_SHEET_ID, '/values/Attendance!F45:AZ45')).values?.[0] || GITA_MEMBERS.map(() => '➖');
                 GITA_MEMBERS.forEach((m, i) => {
                     if (updates[m]) currentVals[i] = updates[m];
                 });
                 await sheetsApi(GITA_SHEET_ID, '/values/Attendance!F45:AZ45?valueInputOption=USER_ENTERED', 'PUT', { values: [currentVals] });
-                await sock.sendMessage(msg.key.remoteJid, { react: { text: '✅', key: msg.key } });
+                await sock.sendMessage(chatJid, { react: { text: '✅', key: msg.key } });
                 logActivity(`Marked ${Object.keys(updates).join(', ')} in live sheet.`);
-            }
-        }
-
-        // 2. Admin Override Commands
-        if (text.startsWith('!mark ')) {
-            const clean = text.replace('!mark ', '').trim();
-            const isPresent = clean.toLowerCase().includes('present');
-            const targetName = clean.split(' ')[0];
-            const matched = GITA_MEMBERS.find(m => m.toLowerCase() === targetName.toLowerCase());
-            if (matched) {
-                const currentVals = (await sheetsApi(GITA_SHEET_ID, '/values/Attendance!F45:AZ45')).values?.[0] || GITA_MEMBERS.map(() => '➖');
-                const idx = GITA_MEMBERS.indexOf(matched);
-                currentVals[idx] = isPresent ? '✅' : '❌';
-                await sheetsApi(GITA_SHEET_ID, '/values/Attendance!F45:AZ45?valueInputOption=USER_ENTERED', 'PUT', { values: [currentVals] });
-                await sock.sendMessage(msg.key.remoteJid, { text: `✅ Updated: *${matched}* marked ${isPresent ? 'Present' : 'Absent'} in live sheet.`, mentions: [sender] });
-            }
-        }
-
-        // 3. Status Report Command
-        if (text.trim() === '!report' || text.trim() === '!status') {
-            const rowData = (await sheetsApi(GITA_SHEET_ID, '/values/Attendance!E45:AZ45')).values?.[0] || [];
-            const summary = rowData[0] || 'No attendance logged yet for today.';
-            await sock.sendMessage(msg.key.remoteJid, { text: `📊 *Current Attendance Status:*\n${summary}` }, { quoted: msg });
-        }
-    });
-
-    // Real-Time Poll Vote Listener
-    sock.ev.on('messages.update', async (updates) => {
-        for (const update of updates) {
-            if (update.update.pollUpdates) {
-                logActivity(`Poll vote detected in group!`);
             }
         }
     });
