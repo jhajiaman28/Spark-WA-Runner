@@ -6,10 +6,11 @@ import https from 'https';
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Google OAuth Credentials (Base64 encoded to bypass GitHub Secret Scanner)
+// Google OAuth Credentials
 const CLIENT_ID = Buffer.from('NDExNDAxNTQyNDItMDFoZHNkcjk0N2NwcWdtcTZndjJwazJlYzN2NTlnMmguYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20=', 'base64').toString('utf-8');
 const CLIENT_SECRET = Buffer.from('R09DU1BYLVpaeFlIenJmSmd2djJzTTc0cW5OWi1xRkt2M28=', 'base64').toString('utf-8');
 const REFRESH_TOKEN = Buffer.from('MS8vMGd4dDlfYy1rMTRibkNnWUlBUkFBR0JBU053Ri1MOUlybFdFNEJiMzc2b2FVLXRucTBvZExUeU9xTi1pek9TemdvUTFrR3NmTmY3S2VVd1RQajVFX1gxNkJHcm4yYUpyNWRBOA==', 'base64').toString('utf-8');
+
 const GITA_SHEET_ID = '1rgF4V1wIZF_kJvbbmjgiDTOXPQckFvDmMzLN80dILuw';
 
 let qrDataUrl = '';
@@ -197,9 +198,9 @@ async function startBot() {
           continue;
         }
 
-        // Target active row: Row 45 (13/10/26) or specify dynamically
+        // Target active row: Row 45 (13/10/26) in the "Attendance" tab
         const targetRow = 45;
-        const cell = `Attendance Register!${col}${targetRow}`;
+        const cell = `Attendance!${col}${targetRow}`;
 
         try {
           await updateSheetCell(cell, symbol);
