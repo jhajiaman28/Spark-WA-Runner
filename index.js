@@ -49,7 +49,7 @@ app.get('/', async (req, res) => {
         <h2 style="color:#2ea043;">✅ Spark WA Runner is Active & Connected</h2>
         <p>Uptime: ${Math.floor((Date.now() - botStartTime) / 60000)} minutes</p>
         <p>Active AI Model: ${workingModelName || 'Auto-Discovering Flash'}</p>
-        <p>Gita Community Quiz Engine: 3-Message Hindi Workflow Active</p>
+        <p>Formatting: Native WhatsApp Sanitizer Active</p>
         <p style="margin-top:30px;"><a href="/reset" style="color:#f85149;text-decoration:none;font-size:12px;border:1px solid #f85149;padding:6px 12px;border-radius:6px;">⚠️ Reset Session & Generate Fresh QR</a></p>
       </body>
       </html>
@@ -250,6 +250,29 @@ function queueSaveBundle() {
   }, 3000);
 }
 
+// --- WhatsApp Native Formatting Sanitizer ---
+function formatForWhatsApp(text) {
+  if (!text) return '';
+  let s = text;
+
+  // Convert markdown horizontal rules (---, ***) to WhatsApp divider
+  s = s.replace(/^[ \t]*[-*_]{3,}[ \t]*$/gm, '*───────────────────*');
+
+  // Convert markdown headers (### Heading, ## Heading, # Heading) to *Heading*
+  s = s.replace(/^[ \t]*#{1,6}[ \t]+(.*)$/gm, '*$1*');
+
+  // Convert markdown bold-italic ***text*** to WhatsApp *_text_*
+  s = s.replace(/\*\*\*(.*?)\*\*\*/g, '*_$1_*');
+
+  // Convert markdown bold **text** to WhatsApp *text*
+  s = s.replace(/\*\*(.*?)\*\*/g, '*$1*');
+
+  // Clean any stray double asterisks
+  s = s.replace(/\*\*/g, '*');
+
+  return s.trim();
+}
+
 // --- Gemini AI Prompts & Engine ---
 const SPARK_PERSONA_PROMPT = `
 You are Gemini Spark, a personal research assistant supporting Aman Jha (MBBS student at GSVM Medical College, Kanpur / ABVMU).
@@ -257,6 +280,7 @@ Guidelines:
 - Tone: Grounded, warm, direct, respectful peer collaborator.
 - Style: Clear, concise English, active voice, selective bolding, scannable structure.
 - Context: Deep appreciation for Bhagavad Gita and Vedanta, rigorous medical academic progress, and community service.
+- FORMATTING RULE: Use strictly WhatsApp formatting! Use *text* for bold (never ** or ***). Use _text_ for italics. Never use ### headers or markdown dividers.
 - Never write filler, corporate buzzwords, or meta-announcements. Answer directly and substantively.
 `;
 
@@ -270,6 +294,12 @@ MANDATORY LANGUAGE RULE:
 - Use clean English in Latin script ONLY for technical/conceptual keywords (e.g., Symptom, Consumption, Ecosystem, Lifestyle, Care & Maintenance).
 - STRICTLY FORBIDDEN: Dual-bracketed translations like 'Symptom (लक्षण)' ❌ or transliterations like 'कांसेप्ट' ❌.
 - NEVER transliterate Hindi words in English (never write 'Bhog' ❌). Write 'Consumption' (strongly preferred) or 'भोग'.
+
+STRICT WHATSAPP FORMATTING RULES:
+- BOLD: Use strictly SINGLE asterisk: *text* (NEVER ** or ***).
+- ITALICS: Use single underscore: _text_.
+- NEVER use markdown headers like ### or ##. Use *Heading* instead.
+- NEVER use markdown dividers like --- or ***. Use *───────────────────* instead.
 
 EDITORIAL & OPTION RULES:
 1. Never declare the conclusion or preach upfront in the question premise.
@@ -560,12 +590,12 @@ async function startWhatsAppBot() {
         console.log(`[Poll Generator] Generating 3-message quiz poll for: "${sourceContent.slice(0, 60)}..."`);
         await sock.sendMessage(remoteJid, { text: '⏳ Crafting Gita Community Quiz Poll (3 Messages)...' }, { quoted: msg });
 
-        const pollResult = await generatePollFromPost(sourceContent);
+        const rawPollResult = await generatePollFromPost(sourceContent);
 
-        // Split into 3 separate WhatsApp messages
-        const parts = pollResult
+        // Split into 3 separate WhatsApp messages and sanitize formatting
+        const parts = rawPollResult
           .split(/===MSG[1-3]===/i)
-          .map(p => p.trim())
+          .map(p => formatForWhatsApp(p))
           .filter(Boolean);
 
         if (parts.length >= 2) {
@@ -574,7 +604,7 @@ async function startWhatsAppBot() {
             if (i < parts.length - 1) await delay(1200); // Chronological delivery delay
           }
         } else {
-          await sock.sendMessage(remoteJid, { text: pollResult });
+          await sock.sendMessage(remoteJid, { text: formatForWhatsApp(rawPollResult) });
         }
         continue;
       }
@@ -584,7 +614,7 @@ async function startWhatsAppBot() {
         const query = text.slice(10).trim();
         if (query) {
           const aiReply = await queryGemini(query, true);
-          await sock.sendMessage(remoteJid, { text: aiReply }, { quoted: msg });
+          await sock.sendMessage(remoteJid, { text: formatForWhatsApp(aiReply) }, { quoted: msg });
         }
         continue;
       }
@@ -594,7 +624,7 @@ async function startWhatsAppBot() {
         const query = text.slice(4).trim();
         if (query) {
           const aiReply = await queryGemini(query, false);
-          await sock.sendMessage(remoteJid, { text: aiReply }, { quoted: msg });
+          await sock.sendMessage(remoteJid, { text: formatForWhatsApp(aiReply) }, { quoted: msg });
         }
         continue;
       }
@@ -603,7 +633,7 @@ async function startWhatsAppBot() {
       if (isGroup && groupSubject === 'gemini') {
         if (isMe && (text.startsWith('⚡') || text.startsWith('⚠️') || text.startsWith('⏳'))) continue;
         const aiReply = await queryGemini(text, true);
-        await sock.sendMessage(remoteJid, { text: aiReply }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: formatForWhatsApp(aiReply) }, { quoted: msg });
         continue;
       }
 
