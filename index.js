@@ -20,7 +20,7 @@ const GITA_COMMUNITY_JID = '120363406391193280@g.us';
 const VSC_ACADEMICS_JID = '120363425711044492@g.us';
 const VIDYA_AVIDYA_JID = '120363427315951484@g.us';
 
-// Embedded Google OAuth Credentials for Drive Backup
+// Embedded Google OAuth Credentials
 const GOOGLE_CLIENT_ID = '41140154242-01hdsdr947cpqgmq6gv2pk2ec3v59g2h.apps.googleusercontent.com';
 const GOOGLE_CLIENT_SECRET = Buffer.from('R09DU1BYLVpaeFlIenJmSmd2djJzTTc0cW5OWi1xRkt2M28=', 'base64').toString('utf8');
 const GOOGLE_REFRESH_TOKEN = '1//0gxt9_c-k14bnCgYIARAAGBASNwF-L9IrlWE4Bb376oaU-tnq0odLTyOqN-izOSzgoQ1kGsfNf7KeUwTPj5E_X16BGrn2aJr5dA8';
@@ -34,7 +34,7 @@ let botStartTime = Date.now();
 let driveSaveTimeout = null;
 let workingModelName = null;
 
-// --- Express Web Dashboard & Health Pings ---
+// --- Express Web Dashboard ---
 const app = express();
 app.use(express.json());
 
@@ -48,6 +48,7 @@ app.get('/', async (req, res) => {
         <h2 style="color:#2ea043;">✅ Spark WA Runner is Active & Connected</h2>
         <p>Uptime: ${Math.floor((Date.now() - botStartTime) / 60000)} minutes</p>
         <p>Active AI Model: ${workingModelName || 'Auto-Discovering Flash'}</p>
+        <p>Feature: Quote a post and say "do your work" to generate quiz poll</p>
         <p style="margin-top:30px;"><a href="/reset" style="color:#f85149;text-decoration:none;font-size:12px;border:1px solid #f85149;padding:6px 12px;border-radius:6px;">⚠️ Reset Session & Generate Fresh QR</a></p>
       </body>
       </html>
@@ -248,7 +249,7 @@ function queueSaveBundle() {
   }, 3000);
 }
 
-// --- Gemini AI Engine (Dynamic Flash Discovery) ---
+// --- Gemini AI Prompts & Engine ---
 const SPARK_PERSONA_PROMPT = `
 You are Gemini Spark, a personal research assistant supporting Aman Jha (MBBS student at GSVM Medical College, Kanpur / ABVMU).
 Guidelines:
@@ -258,7 +259,73 @@ Guidelines:
 - Never write filler, corporate buzzwords, or meta-announcements. Answer directly and substantively.
 `;
 
-async function queryGemini(prompt, isSparkPersona = false) {
+const POLL_GENERATOR_PROMPT = `
+You are the Quiz Poll Creator for the CW Gita Community, strictly adhering to Rohan's Editorial Principles and the AP Framework.
+Your task is to take the provided source text/post and generate a complete Morning Quiz Poll and Evening Answer Post formatted specifically for WhatsApp.
+
+Strict Editorial & Formatting Rules:
+1. Editorial Principles:
+- Never declare the conclusion or preach upfront in the question premise.
+- Break biases with counter-intuitive, eye-opening facts from the post.
+- Option differentiation: Structure 1 true root cause against 3 common, persuasive surface misconceptions. Do NOT make multiple options simultaneously true scientific facts.
+- The correct option must represent the deepest root reality (human lifestyle, desire, and Consumption / भोग).
+
+2. Terminology & Script Rules:
+- Accessible conversational Hindi combined with standard Latin English words for concepts (e.g., Symptom, Consumption, Ecosystem, Lifestyle, Care & Maintenance).
+- STRICTLY FORBIDDEN: Dual-bracketed translations like 'Symptom (लक्षण)' or transliterations like 'कांसेप्ट'.
+- NEVER transliterate Hindi words in English script (never write 'Bhog'). Either write 'Consumption' (strongly preferred) or 'भोग' in Devanagari.
+
+3. WhatsApp Styling & Emojis:
+- Bolds: *text*. Italics: _text_.
+- Spacing: Always keep space around dashes: '— *' (never '—*').
+- Paragraph Emojis: Exactly 1 emoji at the very start of regular text paragraphs.
+- Option Emojis: Keycap numbers 1️⃣, 2️⃣, 3️⃣, 4️⃣ start each line. The single thematic emoji for each option MUST be placed at the very END of that option line.
+- No doubles: Never place two emojis side-by-side.
+
+Output Format:
+
+[PART 1: MORNING QUIZ POLL]
+*Good Morning Everyone!* 🙏
+Let's begin the day with [short reflective tone phrase] ☀️
+
+A fresh morning, a fresh opportunity to [short reflective phrase] 🌱
+
+[ *QUIZ — Day [X] | [Date]* ]
+
+*───────────────────*
+
+[1-2 short dilemma paragraphs starting with an emoji, key concepts in *bold*]
+
+❓ *Question:*
+[Counter-intuitive dilemma question without preaching the answer]
+
+____________________
+
+🎯 *Options:*
+
+1️⃣ [*Option 1 with core concept*] [thematic emoji]
+2️⃣ [*Option 2 with core concept*] [thematic emoji]
+3️⃣ [*Option 3 with core concept*] [thematic emoji]
+4️⃣ [*Option 4 with core concept*] [thematic emoji]
+
+*───────────────────*
+
+[PART 2: EVENING ANSWER POST]
+*[Answer - QUIZ - Day [X] - [Date]]*
+*───────────────────*
+✅ *Correct Answer:* *Option [X]* — _[Verbatim option in italics]_
+*───────────────────*
+
+[Story hook connecting Options 1 & 2]
+[Root deconstruction of Option 3]
+[Deep philosophical conclusion pointing to human lifestyle and Consumption / भोग]
+
+📚 *स्त्रोत:*
+1️⃣ [Source Article / Reference from post]
+2️⃣ AP GITA COMMUNITY
+`;
+
+async function callGemini(fullPrompt) {
   const rawKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
   const apiKey = rawKey.replace(/["']/g, '').trim();
 
@@ -266,17 +333,9 @@ async function queryGemini(prompt, isSparkPersona = false) {
     return '⚠️ Gemini API key is missing. Set GEMINI_API_KEY in Render Environment Variables.';
   }
 
-  const systemInstruction = isSparkPersona ? SPARK_PERSONA_PROMPT : '';
-  const userText = isSparkPersona
-    ? `${systemInstruction}\n\nUser Question: ${prompt}`
-    : prompt;
-
   let modelsToTry = [];
-  if (workingModelName) {
-    modelsToTry.push(workingModelName);
-  }
+  if (workingModelName) modelsToTry.push(workingModelName);
 
-  // Fetch real model list enabled for this key from Google
   try {
     const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
     const listData = await listRes.json();
@@ -285,15 +344,11 @@ async function queryGemini(prompt, isSparkPersona = false) {
         .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
         .map(m => m.name.replace('models/', ''));
 
-      // Filter for Flash models (filters out Pro models that have limit: 0 on free tier)
       const flashModels = valid.filter(m => m.toLowerCase().includes('flash'));
       const otherModels = valid.filter(m => !m.toLowerCase().includes('flash') && !m.toLowerCase().includes('pro'));
-
       modelsToTry = Array.from(new Set([...modelsToTry, ...flashModels, ...otherModels, ...valid]));
     }
-  } catch (err) {
-    console.error('[Gemini] ListModels error:', err.message);
-  }
+  } catch (_) {}
 
   if (modelsToTry.length === 0) {
     modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash-001', 'gemini-1.5-flash-002', 'gemini-1.5-flash'];
@@ -308,10 +363,10 @@ async function queryGemini(prompt, isSparkPersona = false) {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          contents: [{ parts: [{ text: userText }] }],
+          contents: [{ parts: [{ text: fullPrompt }] }],
           generationConfig: {
             temperature: 0.7,
-            maxOutputTokens: 1000
+            maxOutputTokens: 1500
           }
         })
       });
@@ -319,22 +374,35 @@ async function queryGemini(prompt, isSparkPersona = false) {
       const data = await res.json();
 
       if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
-        workingModelName = model; // Cache working model
+        workingModelName = model;
         return data.candidates[0].content.parts[0].text.trim();
       }
 
       if (data.error) {
-        errors.push(`${model}: ${data.error.message.slice(0, 120)}`);
+        errors.push(`${model}: ${data.error.message.slice(0, 100)}`);
       }
     } catch (netErr) {
       errors.push(`${model}: ${netErr.message}`);
     }
   }
 
-  return `⚠️ AI Error (Quota/Model):\n${errors.slice(0, 2).join('\n')}`;
+  return `⚠️ AI Error: Could not generate response with available models.\n${errors.slice(0, 2).join('\n')}`;
 }
 
-// Unboxes standard, ephemeral (disappearing), and media messages
+async function queryGemini(prompt, isSparkPersona = false) {
+  const systemInstruction = isSparkPersona ? SPARK_PERSONA_PROMPT : '';
+  const userText = isSparkPersona
+    ? `${systemInstruction}\n\nUser Question: ${prompt}`
+    : prompt;
+  return await callGemini(userText);
+}
+
+async function generatePollFromPost(postText) {
+  const fullPrompt = `${POLL_GENERATOR_PROMPT}\n\nHere is the source post:\n"""\n${postText}\n"""\n\nGenerate the complete Morning Quiz Poll and Evening Answer Post now:`;
+  return await callGemini(fullPrompt);
+}
+
+// Unboxes standard, ephemeral, and media text
 function extractTextFromMessage(message) {
   if (!message) return '';
   const m =
@@ -350,6 +418,18 @@ function extractTextFromMessage(message) {
     m.videoMessage?.caption ||
     ''
   );
+}
+
+// Extracts quoted / replied-to message text
+function extractQuotedText(msg) {
+  const contextInfo =
+    msg.message?.extendedTextMessage?.contextInfo ||
+    msg.message?.imageMessage?.contextInfo ||
+    msg.message?.videoMessage?.contextInfo ||
+    msg.message?.ephemeralMessage?.message?.extendedTextMessage?.contextInfo;
+
+  if (!contextInfo?.quotedMessage) return '';
+  return extractTextFromMessage(contextInfo.quotedMessage).trim();
 }
 
 // --- Baileys WhatsApp Runner ---
@@ -384,13 +464,11 @@ async function startWhatsAppBot() {
 
       console.log(`[Connection] Closed. Status: ${statusCode}`);
 
-      // Stop immediately if replaced by newer container to prevent collisions
       if (isReplaced) {
         console.log('[Connection] Replaced by newer container. Standing down.');
         return;
       }
 
-      // If logged out from phone, automatically purge Drive bundle and show fresh QR
       if (isLoggedOut) {
         console.log('[Connection] Session revoked on phone. Purging Drive bundle and regenerating QR...');
         if (fs.existsSync(AUTH_DIR)) fs.rmSync(AUTH_DIR, { recursive: true, force: true });
@@ -439,7 +517,6 @@ async function startWhatsAppBot() {
       // Ignore personal chat "(You)" / 1-on-1 messages sent to oneself
       if (!isGroup && isMe) continue;
 
-      // Group subject inspection
       let groupSubject = '';
       if (isGroup) {
         try {
@@ -451,9 +528,42 @@ async function startWhatsAppBot() {
       // Ignore groups named "CHAT"
       if (groupSubject === 'chat') continue;
 
-      console.log(`[Incoming Msg] ${remoteJid} (${groupSubject || 'DM'}): "${text}"`);
-
       const lower = text.toLowerCase();
+
+      // --- FEATURE: "do your work" / "!quiz" (Quote-based Poll Generation) ---
+      const isPollTrigger =
+        lower === 'do your work' ||
+        lower.startsWith('do your work') ||
+        lower === '!quiz' ||
+        lower.startsWith('!quiz') ||
+        lower === '!poll create';
+
+      if (isPollTrigger) {
+        // 1. Check if the user quoted a post
+        const quotedText = extractQuotedText(msg);
+        let sourceContent = quotedText;
+
+        // 2. If not quoted, check if source text was provided after the command
+        if (!sourceContent) {
+          sourceContent = text.replace(/^(do your work|!quiz|!poll create)/i, '').trim();
+        }
+
+        if (!sourceContent) {
+          await sock.sendMessage(
+            remoteJid,
+            { text: '⚠️ Please reply to (quote) a post message and type *do your work*, or paste the post after the command.' },
+            { quoted: msg }
+          );
+          continue;
+        }
+
+        console.log(`[Poll Generator] Generating quiz poll for: "${sourceContent.slice(0, 60)}..."`);
+        await sock.sendMessage(remoteJid, { text: '⏳ Crafting Gita Community Quiz Poll & Evening Answer...' }, { quoted: msg });
+
+        const pollResult = await generatePollFromPost(sourceContent);
+        await sock.sendMessage(remoteJid, { text: pollResult }, { quoted: msg });
+        continue;
+      }
 
       // 1. Universal !ask spark <prompt>
       if (lower.startsWith('!ask spark')) {
@@ -477,7 +587,7 @@ async function startWhatsAppBot() {
 
       // 3. Dedicated Gemini Group (Auto-reply with Spark Persona)
       if (isGroup && groupSubject === 'gemini') {
-        if (isMe && (text.startsWith('⚡') || text.startsWith('⚠️'))) continue;
+        if (isMe && (text.startsWith('⚡') || text.startsWith('⚠️') || text.startsWith('⏳'))) continue;
         const aiReply = await queryGemini(text, true);
         await sock.sendMessage(remoteJid, { text: aiReply }, { quoted: msg });
         continue;
@@ -502,7 +612,7 @@ async function handleAdminCommand(jid, text, msg) {
       `• *State:* ${isPaused ? '⏸️ Paused' : '✅ Active'}\n` +
       `• *Uptime:* ${uptimeMin} minutes\n` +
       `• *Session Sync:* Google Drive Cloud Bundle\n` +
-      `• *AI Commands:* \`!ask <prompt>\` & \`!ask spark <prompt>\` active\n` +
+      `• *AI Commands:* \`!ask\`, \`!ask spark\`, and \`do your work\` (quote post)\n` +
       `• *Gemini Group:* Auto-responds with Spark Persona\n` +
       `• *Exclusions:* Personal chat (You) & group "CHAT"`;
     await sock.sendMessage(jid, { text: statusMsg }, { quoted: msg });
