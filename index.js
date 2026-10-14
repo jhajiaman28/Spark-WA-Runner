@@ -2,7 +2,8 @@
 import makeWASocket, {
   DisconnectReason,
   useMultiFileAuthState,
-  fetchLatestBaileysVersion
+  fetchLatestBaileysVersion,
+  delay
 } from '@whiskeysockets/baileys';
 import express from 'express';
 import QRCode from 'qrcode';
@@ -20,7 +21,7 @@ const GITA_COMMUNITY_JID = '120363406391193280@g.us';
 const VSC_ACADEMICS_JID = '120363425711044492@g.us';
 const VIDYA_AVIDYA_JID = '120363427315951484@g.us';
 
-// Embedded Google OAuth Credentials
+// Embedded Google OAuth Credentials for Drive Backup
 const GOOGLE_CLIENT_ID = '41140154242-01hdsdr947cpqgmq6gv2pk2ec3v59g2h.apps.googleusercontent.com';
 const GOOGLE_CLIENT_SECRET = Buffer.from('R09DU1BYLVpaeFlIenJmSmd2djJzTTc0cW5OWi1xRkt2M28=', 'base64').toString('utf8');
 const GOOGLE_REFRESH_TOKEN = '1//0gxt9_c-k14bnCgYIARAAGBASNwF-L9IrlWE4Bb376oaU-tnq0odLTyOqN-izOSzgoQ1kGsfNf7KeUwTPj5E_X16BGrn2aJr5dA8';
@@ -34,7 +35,7 @@ let botStartTime = Date.now();
 let driveSaveTimeout = null;
 let workingModelName = null;
 
-// --- Express Web Dashboard ---
+// --- Express Web Dashboard & Health Pings ---
 const app = express();
 app.use(express.json());
 
@@ -48,7 +49,7 @@ app.get('/', async (req, res) => {
         <h2 style="color:#2ea043;">✅ Spark WA Runner is Active & Connected</h2>
         <p>Uptime: ${Math.floor((Date.now() - botStartTime) / 60000)} minutes</p>
         <p>Active AI Model: ${workingModelName || 'Auto-Discovering Flash'}</p>
-        <p>Feature: Quote a post and say "do your work" to generate quiz poll</p>
+        <p>Gita Community Quiz Engine: 3-Message Hindi Workflow Active</p>
         <p style="margin-top:30px;"><a href="/reset" style="color:#f85149;text-decoration:none;font-size:12px;border:1px solid #f85149;padding:6px 12px;border-radius:6px;">⚠️ Reset Session & Generate Fresh QR</a></p>
       </body>
       </html>
@@ -260,65 +261,65 @@ Guidelines:
 `;
 
 const POLL_GENERATOR_PROMPT = `
-You are the Quiz Poll Creator for the CW Gita Community, strictly adhering to Rohan's Editorial Principles and the AP Framework.
-Your task is to take the provided source text/post and generate a complete Morning Quiz Poll and Evening Answer Post formatted specifically for WhatsApp.
+You are the Quiz Poll Creator for the CW Gita Community, strictly following Rohan's Editorial Principles and the AP Framework.
+Your task is to take the provided source post and generate EXACTLY 3 SEPARATE WHATSAPP MESSAGES.
 
-Strict Editorial & Formatting Rules:
-1. Editorial Principles:
-- Never declare the conclusion or preach upfront in the question premise.
-- Break biases with counter-intuitive, eye-opening facts from the post.
-- Option differentiation: Structure 1 true root cause against 3 common, persuasive surface misconceptions. Do NOT make multiple options simultaneously true scientific facts.
-- The correct option must represent the deepest root reality (human lifestyle, desire, and Consumption / भोग).
+MANDATORY LANGUAGE RULE:
+- All body text, questions, dilemma, options, and explanation MUST be written in natural, conversational HINDI (देवनागरी लिपि).
+- Do NOT write full sentences or paragraphs in English.
+- Use clean English in Latin script ONLY for technical/conceptual keywords (e.g., Symptom, Consumption, Ecosystem, Lifestyle, Care & Maintenance).
+- STRICTLY FORBIDDEN: Dual-bracketed translations like 'Symptom (लक्षण)' ❌ or transliterations like 'कांसेप्ट' ❌.
+- NEVER transliterate Hindi words in English (never write 'Bhog' ❌). Write 'Consumption' (strongly preferred) or 'भोग'.
 
-2. Terminology & Script Rules:
-- Accessible conversational Hindi combined with standard Latin English words for concepts (e.g., Symptom, Consumption, Ecosystem, Lifestyle, Care & Maintenance).
-- STRICTLY FORBIDDEN: Dual-bracketed translations like 'Symptom (लक्षण)' or transliterations like 'कांसेप्ट'.
-- NEVER transliterate Hindi words in English script (never write 'Bhog'). Either write 'Consumption' (strongly preferred) or 'भोग' in Devanagari.
+EDITORIAL & OPTION RULES:
+1. Never declare the conclusion or preach upfront in the question premise.
+2. Break biases with counter-intuitive, eye-opening facts from the post.
+3. Option differentiation: Structure 1 true root cause against 3 common, persuasive surface misconceptions. Do NOT make multiple options simultaneously true scientific facts.
+4. The correct option must represent the deepest root reality (human lifestyle, desire, and Consumption / भोग).
+5. Emojis:
+   - Exactly 1 emoji at the very start of regular text paragraphs.
+   - For options: 1️⃣, 2️⃣, 3️⃣, 4️⃣ start each line. The single thematic emoji MUST be placed at the very END of that option line.
+   - Never place two emojis side-by-side.
+6. Dashes: Always leave space: '— *' (never '—*').
 
-3. WhatsApp Styling & Emojis:
-- Bolds: *text*. Italics: _text_.
-- Spacing: Always keep space around dashes: '— *' (never '—*').
-- Paragraph Emojis: Exactly 1 emoji at the very start of regular text paragraphs.
-- Option Emojis: Keycap numbers 1️⃣, 2️⃣, 3️⃣, 4️⃣ start each line. The single thematic emoji for each option MUST be placed at the very END of that option line.
-- No doubles: Never place two emojis side-by-side.
+You MUST output the 3 messages separated EXACTLY by the tags ===MSG1===, ===MSG2===, and ===MSG3===.
 
-Output Format:
-
-[PART 1: MORNING QUIZ POLL]
+===MSG1===
 *Good Morning Everyone!* 🙏
-Let's begin the day with [short reflective tone phrase] ☀️
+Let's begin the day with [short reflective Hindi phrase] ☀️
 
-A fresh morning, a fresh opportunity to [short reflective phrase] 🌱
+A fresh morning, a fresh opportunity to [short reflective Hindi phrase] 🌱
 
 [ *QUIZ — Day [X] | [Date]* ]
 
 *───────────────────*
 
-[1-2 short dilemma paragraphs starting with an emoji, key concepts in *bold*]
+[1-2 short dilemma paragraphs in simple conversational Hindi, starting each with 1 emoji, key concepts in *bold Latin English*]
 
+===MSG2===
 ❓ *Question:*
-[Counter-intuitive dilemma question without preaching the answer]
+[Counter-intuitive dilemma question in simple Hindi without revealing the answer]
 
 ____________________
 
 🎯 *Options:*
 
-1️⃣ [*Option 1 with core concept*] [thematic emoji]
-2️⃣ [*Option 2 with core concept*] [thematic emoji]
-3️⃣ [*Option 3 with core concept*] [thematic emoji]
-4️⃣ [*Option 4 with core concept*] [thematic emoji]
+1️⃣ [*Option 1 in Hindi with bold concept*] [thematic emoji]
+2️⃣ [*Option 2 in Hindi with bold concept*] [thematic emoji]
+3️⃣ [*Option 3 in Hindi with bold concept*] [thematic emoji]
+4️⃣ [*Option 4 in Hindi with bold concept*] [thematic emoji]
 
-*───────────────────*
-
-[PART 2: EVENING ANSWER POST]
+===MSG3===
 *[Answer - QUIZ - Day [X] - [Date]]*
 *───────────────────*
 ✅ *Correct Answer:* *Option [X]* — _[Verbatim option in italics]_
 *───────────────────*
 
-[Story hook connecting Options 1 & 2]
-[Root deconstruction of Option 3]
-[Deep philosophical conclusion pointing to human lifestyle and Consumption / भोग]
+[Story hook connecting Options 1 & 2 in conversational Hindi]
+
+[Root deconstruction of Option 3 in conversational Hindi]
+
+[Deep conclusion pointing to human lifestyle and Consumption / भोग]
 
 📚 *स्त्रोत:*
 1️⃣ [Source Article / Reference from post]
@@ -398,7 +399,8 @@ async function queryGemini(prompt, isSparkPersona = false) {
 }
 
 async function generatePollFromPost(postText) {
-  const fullPrompt = `${POLL_GENERATOR_PROMPT}\n\nHere is the source post:\n"""\n${postText}\n"""\n\nGenerate the complete Morning Quiz Poll and Evening Answer Post now:`;
+  const todayDate = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit' });
+  const fullPrompt = `${POLL_GENERATOR_PROMPT}\n\nToday's Date: ${todayDate}\n\nSource Post:\n"""\n${postText}\n"""\n\nGenerate the 3 messages with the delimiters ===MSG1===, ===MSG2===, and ===MSG3===:`;
   return await callGemini(fullPrompt);
 }
 
@@ -530,7 +532,7 @@ async function startWhatsAppBot() {
 
       const lower = text.toLowerCase();
 
-      // --- FEATURE: "do your work" / "!quiz" (Quote-based Poll Generation) ---
+      // --- FEATURE: "do your work" / "!quiz" (Quote-based 3-Message Poll Generation) ---
       const isPollTrigger =
         lower === 'do your work' ||
         lower.startsWith('do your work') ||
@@ -539,11 +541,9 @@ async function startWhatsAppBot() {
         lower === '!poll create';
 
       if (isPollTrigger) {
-        // 1. Check if the user quoted a post
         const quotedText = extractQuotedText(msg);
         let sourceContent = quotedText;
 
-        // 2. If not quoted, check if source text was provided after the command
         if (!sourceContent) {
           sourceContent = text.replace(/^(do your work|!quiz|!poll create)/i, '').trim();
         }
@@ -551,17 +551,31 @@ async function startWhatsAppBot() {
         if (!sourceContent) {
           await sock.sendMessage(
             remoteJid,
-            { text: '⚠️ Please reply to (quote) a post message and type *do your work*, or paste the post after the command.' },
+            { text: '⚠️ Please reply to (quote) a post message and type *do your work*.' },
             { quoted: msg }
           );
           continue;
         }
 
-        console.log(`[Poll Generator] Generating quiz poll for: "${sourceContent.slice(0, 60)}..."`);
-        await sock.sendMessage(remoteJid, { text: '⏳ Crafting Gita Community Quiz Poll & Evening Answer...' }, { quoted: msg });
+        console.log(`[Poll Generator] Generating 3-message quiz poll for: "${sourceContent.slice(0, 60)}..."`);
+        await sock.sendMessage(remoteJid, { text: '⏳ Crafting Gita Community Quiz Poll (3 Messages)...' }, { quoted: msg });
 
         const pollResult = await generatePollFromPost(sourceContent);
-        await sock.sendMessage(remoteJid, { text: pollResult }, { quoted: msg });
+
+        // Split into 3 separate WhatsApp messages
+        const parts = pollResult
+          .split(/===MSG[1-3]===/i)
+          .map(p => p.trim())
+          .filter(Boolean);
+
+        if (parts.length >= 2) {
+          for (let i = 0; i < parts.length; i++) {
+            await sock.sendMessage(remoteJid, { text: parts[i] });
+            if (i < parts.length - 1) await delay(1200); // Chronological delivery delay
+          }
+        } else {
+          await sock.sendMessage(remoteJid, { text: pollResult });
+        }
         continue;
       }
 
