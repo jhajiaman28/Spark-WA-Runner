@@ -7,19 +7,20 @@ import fs from 'fs';
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// Google OAuth Credentials
+// API Keys & Credentials
+const GEMINI_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.API_KEY || '';
 const CLIENT_ID = Buffer.from('NDExNDAxNTQyNDItMDFoZHNkcjk0N2NwcWdtcTZndjJwazJlYzN2NTlnMmguYXBwcy5nb29nbGV1c2VyY29udGVudC5jb20=', 'base64').toString('utf-8');
 const CLIENT_SECRET = Buffer.from('R09DU1BYLVpaeFlIenJmSmd2djJzTTc0cW5OWi1xRkt2M28=', 'base64').toString('utf-8');
 const REFRESH_TOKEN = Buffer.from('MS8vMGd4dDlfYy1rMTRibkNnWUlBUkFBR0JBU053Ri1MOUlybFdFNEJiMzc2b2FVLXRucTBvZExUeU9xTi1pek9TemdvUTFrR3NmTmY3S2VVd1RQajVFX1gxNkJHcm4yYUpyNWRBOA==', 'base64').toString('utf-8');
 
 const GITA_SHEET_ID = '1rgF4V1wIZF_kJvbbmjgiDTOXPQckFvDmMzLN80dILuw';
-const VSC_SHEET_ID = '1b2zj-Fx8LPgtyGjM1vlw6Vf8BZ-aFUf4uwUAIGFf4VY';
 
 // Verified Group IDs
 const SPARK_JID = '120363431984658364@g.us';
 const GITA_JID = '120363406391193280@g.us';
 const VSC_JID = '120363425711044492@g.us';
 const VIDYA_JID = '120363427315951484@g.us';
+let geminiJid = null;
 
 let qrDataUrl = '';
 let isConnected = false;
@@ -34,45 +35,52 @@ function addLog(msg) {
 }
 
 async function sendToSpark(sock, text) {
-  try {
-    await sock.sendMessage(SPARK_JID, { text });
-  } catch (err) {
-    addLog(`Error sending to Spark: ${err.message}`);
-  }
+  try { await sock.sendMessage(SPARK_JID, { text }); } catch (err) { addLog(`Spark send error: ${err.message}`); }
 }
 
 async function sendTagAll(sock, groupId, text) {
   try {
     const meta = await sock.groupMetadata(groupId);
-    await sock.sendMessage(groupId, {
-      text,
-      mentions: meta.participants.map(p => p.id)
-    });
+    await sock.sendMessage(groupId, { text, mentions: meta.participants.map(p => p.id) });
   } catch {
     await sock.sendMessage(groupId, { text });
   }
 }
 
-// 50 Member Column Mapping for CW Gita (F to BC)
-const GITA_MEMBERS = {
-  'alok': 'F', 'aman': 'G', 'amit': 'H', 'anchal': 'I', 'anisha': 'J',
-  'anjali': 'K', 'anju': 'L', 'ankit': 'M', 'anshu': 'N', 'anurag': 'O',
-  'archana': 'P', 'ayush': 'Q', 'bhuwan': 'R', 'chhavi': 'S', 'deepa': 'T',
-  'deva': 'U', 'diksha': 'V', 'dipesh': 'W', 'estuti': 'X', 'garima': 'Y',
-  'harsh': 'Z', 'himanshu': 'AA', 'jyoti': 'AB', 'kanchan': 'AC', 'kartikey': 'AD',
-  'lawkesh': 'AE', 'luxmi': 'AF', 'mamta': 'AG', 'meenu': 'AH', 'muskan': 'AI',
-  'nagendra': 'AJ', 'pooja': 'AK', 'priti': 'AL', 'raghuvansh': 'AM', 'rajnish': 'AN',
-  'rohan': 'AO', 'ruhit': 'AP', 'sahiba': 'AQ', 'saksham': 'AR', 'saloni': 'AS',
-  'sarika': 'AT', 'sarita': 'AU', 'satwik': 'AV', 'shiv': 'AW', 'shivam': 'AX',
-  'shubham': 'AY', 'shweta': 'AZ', 'swapnil': 'BA', 'utkarsh': 'BB', 'vikas': 'BC'
-};
+// Gemini AI Call
+function askGemini(prompt) {
+  return new Promise((resolve, reject) => {
+    if (!GEMINI_KEY) return reject(new Error('GEMINI_API_KEY environment variable not found on Render.'));
+    const payload = JSON.stringify({
+      contents: [{ parts: [{ text: prompt }] }],
+      systemInstruction: {
+        parts: [{ text: "You are Gemini Spark, an MBBS peer collaborator and personal assistant to Aman Jha at GSVM Medical College, Kanpur. Keep responses warm, direct, structured, concise, and helpful." }]
+      }
+    });
 
-// 14 Students for VSC Academics
-const VSC_STUDENTS = [
-  'Rohan', 'Swapnil', 'Anurag', 'Pooja', 'Saksham',
-  'Himanshu', 'Raghuvansh', 'Amit', 'Aman', 'Anisha',
-  'Sahiba', 'Dipesh', 'Muskan', 'Sarita'
-];
+    const req = https.request({
+      hostname: 'generativelanguage.googleapis.com',
+      path: `/v1beta/models/gemini-2.5-flash:generateContent?key=${GEMINI_KEY}`,
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) }
+    }, (res) => {
+      let data = '';
+      res.on('data', chunk => data += chunk);
+      res.on('end', () => {
+        try {
+          const json = JSON.parse(data);
+          const reply = json.candidates?.[0]?.content?.parts?.[0]?.text;
+          if (reply) resolve(reply);
+          else reject(new Error(`Gemini API error: ${data}`));
+        } catch (e) { reject(e); }
+      });
+    });
+
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
 
 function getAccessToken() {
   return new Promise((resolve, reject) => {
@@ -127,9 +135,7 @@ async function restoreSessionFromDrive() {
       addLog('☁️ Auto-restored session from Google Drive! No QR scan needed.');
       return true;
     }
-  } catch (err) {
-    addLog(`Session restore note: ${err.message}`);
-  }
+  } catch (err) { addLog(`Session restore note: ${err.message}`); }
   return false;
 }
 
@@ -150,10 +156,8 @@ async function saveSessionToDrive() {
 
     if (searchRes.files && searchRes.files.length > 0) {
       const req = https.request({
-        hostname: 'www.googleapis.com',
-        path: `/upload/drive/v3/files/${searchRes.files[0].id}?uploadType=media`,
-        method: 'PATCH',
-        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+        hostname: 'www.googleapis.com', path: `/upload/drive/v3/files/${searchRes.files[0].id}?uploadType=media`,
+        method: 'PATCH', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
       }, () => {});
       req.write(credsData);
       req.end();
@@ -166,22 +170,14 @@ async function saveSessionToDrive() {
         `--${boundary}--`;
 
       const req = https.request({
-        hostname: 'www.googleapis.com',
-        path: '/upload/drive/v3/files?uploadType=multipart',
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': `multipart/related; boundary=${boundary}`,
-          'Content-Length': Buffer.byteLength(multipartBody)
-        }
+        hostname: 'www.googleapis.com', path: '/upload/drive/v3/files?uploadType=multipart', method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/related; boundary=${boundary}`, 'Content-Length': Buffer.byteLength(multipartBody) }
       }, () => {});
       req.write(multipartBody);
       req.end();
     }
     addLog('☁️ Session credentials safely synced to Google Drive.');
-  } catch (err) {
-    addLog(`Session backup note: ${err.message}`);
-  }
+  } catch (err) { addLog(`Session backup note: ${err.message}`); }
 }
 
 function updateSheet(sheetId, range, value) {
@@ -223,27 +219,47 @@ function readSheet(sheetId, range) {
   });
 }
 
+const GITA_MEMBERS = {
+  'alok': 'F', 'aman': 'G', 'amit': 'H', 'anchal': 'I', 'anisha': 'J',
+  'anjali': 'K', 'anju': 'L', 'ankit': 'M', 'anshu': 'N', 'anurag': 'O',
+  'archana': 'P', 'ayush': 'Q', 'bhuwan': 'R', 'chhavi': 'S', 'deepa': 'T',
+  'deva': 'U', 'diksha': 'V', 'dipesh': 'W', 'estuti': 'X', 'garima': 'Y',
+  'harsh': 'Z', 'himanshu': 'AA', 'jyoti': 'AB', 'kanchan': 'AC', 'kartikey': 'AD',
+  'lawkesh': 'AE', 'luxmi': 'AF', 'mamta': 'AG', 'meenu': 'AH', 'muskan': 'AI',
+  'nagendra': 'AJ', 'pooja': 'AK', 'priti': 'AL', 'raghuvansh': 'AM', 'rajnish': 'AN',
+  'rohan': 'AO', 'ruhit': 'AP', 'sahiba': 'AQ', 'saksham': 'AR', 'saloni': 'AS',
+  'sarika': 'AT', 'sarita': 'AU', 'satwik': 'AV', 'shiv': 'AW', 'shivam': 'AX',
+  'shubham': 'AY', 'shweta': 'AZ', 'swapnil': 'BA', 'utkarsh': 'BB', 'vikas': 'BC'
+};
+
+const VSC_STUDENTS = [
+  'Rohan', 'Swapnil', 'Anurag', 'Pooja', 'Saksham',
+  'Himanshu', 'Raghuvansh', 'Amit', 'Aman', 'Anisha',
+  'Sahiba', 'Dipesh', 'Muskan', 'Sarita'
+];
+
 const HELP_MENU = `⚡ *Spark 24/7 Command Console*
 
-Here are all active commands you can run anytime in this group:
+Here are all active commands you can run in this group:
 
 📊 *Polls & Reminders*
-• \`!poll gita\` — Dispatches Gita Attendance poll + @all tag to community
+• \`!poll gita\` — Dispatches Gita Attendance poll + @all tag
 • \`!poll framework\` — Dispatches Framework Availability poll + @all tag
 • \`!poll vidya\` — Dispatches Vidya–Avidya post-count poll + @all tag
 • \`!remind gita\` — Scans sheet & tags ONLY members who haven't voted (➖)
-• \`!remind vsc\` — Scans tracker & tags ONLY students with blank study logs
+• \`!remind vsc\` — Tags students who haven't updated their study log
 • \`!mark <name> <p/a>\` — Manual attendance override (e.g. \`!mark Ankit p\`)
 
 📖 *VSC Academics*
 • \`!template vsc\` — Dispatches blank 14-student study tracker for yesterday (D-1)
 
-⚙️ *System & Safety Controls*
-• \`#start\` / \`!help\` — Restarts chat console & shows this command directory
-• \`!status\` — Checks runner health, uptime, and group bindings
-• \`!find groups\` — Lists all participating WhatsApp groups and their IDs
-• \`!stop\` — Emergency stop (pauses all bot activity)
-• \`!resume\` — Resumes all bot activity`;
+🤖 *Personal AI Assistant*
+• Send any message to the **Gemini** group to chat with AI directly in WhatsApp!
+
+⚙️ *System Controls*
+• \`#start\` / \`!help\` — Shows this directory
+• \`!status\` — Health, uptime, and group bindings
+• \`!stop\` / \`!resume\` — Emergency kill switch`;
 
 async function startBot() {
   await restoreSessionFromDrive();
@@ -257,7 +273,19 @@ async function startBot() {
       qrDataUrl = '';
       addLog('WhatsApp connected.');
       await saveSessionToDrive();
-      await sendToSpark(sock, '⚡ *Spark Console Active (24/7)*\nType `#start` or `!help` anytime to view all commands.');
+
+      // Discover Gemini group
+      try {
+        const groups = await sock.groupFetchAllParticipating();
+        for (const [id, meta] of Object.entries(groups)) {
+          if ((meta.subject || '').trim().toLowerCase() === 'gemini') {
+            geminiJid = id;
+            addLog(`Found Gemini AI group: ${id}`);
+          }
+        }
+      } catch (e) {}
+
+      await sendToSpark(sock, `⚡ *Spark Console Active (24/7)*\n• AI Chat Group: ${geminiJid ? 'Bound' : 'Create a group named "Gemini"'}\nType \`#start\` for commands.`);
     }
     if (connection === 'close') {
       isConnected = false;
@@ -272,20 +300,6 @@ async function startBot() {
     await saveSessionToDrive();
   });
 
-  // Group Participant Join/Leave Monitor (CW Gita)
-  sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
-    if (id !== GITA_JID) return;
-    for (const p of participants) {
-      const num = p.split('@')[0];
-      if (action === 'add') {
-        await sendToSpark(sock, `👤 *New Member Added*: +${num} joined Gita Community.\nConfirm their name to assign their sheet column.`);
-      } else if (action === 'remove') {
-        await sendToSpark(sock, `⚠️ *Member Left/Removed*: +${num} left Gita Community.\nShould their column be removed from the sheet? (Reply to confirm or ignore to keep).`);
-      }
-    }
-  });
-
-  // Message & Command Handler
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
     for (const msg of messages) {
@@ -295,25 +309,15 @@ async function startBot() {
 
       if (!text) continue;
 
-      // Handle VSC Academics Student Tracker Messages (Updates live sheet)
-      if (fromJid === VSC_JID && !text.startsWith('!')) {
-        for (let i = 0; i < VSC_STUDENTS.length; i++) {
-          const student = VSC_STUDENTS[i];
-          const regex = new RegExp(`(?:^|\\n)\\s*\\d*\\.?\\s*${student}\\s*[-–:]?\\s*(.*)`, 'i');
-          const m = text.match(regex);
-          if (m && m[1] && m[1].trim()) {
-            const updateText = m[1].trim();
-            addLog(`VSC Update for ${student}: ${updateText}`);
-            // Target Row 22 + i (Week 2); Col E (Wednesday) or Col D (Tuesday)
-            const targetRow = 22 + i;
-            const targetCol = 'E';
-            try {
-              await updateSheet(VSC_SHEET_ID, `Academics!${targetCol}${targetRow}`, updateText.startsWith('✅') ? updateText : `✅ ${updateText}`);
-              await sendToSpark(sock, `📖 *VSC Synced to Sheet*: *${student}* (Row ${targetRow}) - ${updateText}`);
-            } catch (e) {
-              addLog(`VSC sheet update error: ${e.message}`);
-            }
-          }
+      // 1. DEDICATED GEMINI AI GROUP CHAT (Direct WhatsApp AI Assistant)
+      if (geminiJid && fromJid === geminiJid) {
+        try {
+          await sock.sendPresenceUpdate('composing', geminiJid);
+          const aiResponse = await askGemini(text);
+          await sock.sendMessage(geminiJid, { text: aiResponse });
+          addLog(`Replied to Gemini prompt: "${text.slice(0, 30)}..."`);
+        } catch (err) {
+          await sock.sendMessage(geminiJid, { text: `⚠️ AI Assistant Error: ${err.message}` });
         }
         continue;
       }
@@ -328,13 +332,13 @@ async function startBot() {
       }
 
       // Emergency Controls
-      if (text === '!stop') { isStopped = true; await sendToSpark(sock, '🛑 *Bot Stopped.* Automation paused.'); continue; }
-      if (text === '!resume') { isStopped = false; await sendToSpark(sock, '▶️ *Bot Resumed.* Normal operations active.'); continue; }
+      if (text === '!stop') { isStopped = true; await sendToSpark(sock, '🛑 *Bot Stopped.*'); continue; }
+      if (text === '!resume') { isStopped = false; await sendToSpark(sock, '▶️ *Bot Resumed.*'); continue; }
       if (isStopped) continue;
 
       // Status Check
       if (text === '!status') {
-        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Gita Community: Bound\n• VSC Academics: Bound\n• Vidya-Avidya: Bound\n• Cloud Session: Synced to Google Drive`);
+        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Gita Community: Bound\n• VSC Academics: Bound\n• Vidya-Avidya: Bound\n• Gemini AI Group: ${geminiJid ? 'Bound' : 'Not detected'}\n• Session Storage: Google Drive Synced`);
         continue;
       }
 
@@ -355,7 +359,7 @@ async function startBot() {
           const rows = await readSheet(GITA_SHEET_ID, 'Attendance Register!F45:BC45');
           const todayRow = rows[0] || [];
           const unvoted = [];
-          Object.entries(GITA_MEMBERS).forEach(([name, col], idx) => {
+          Object.entries(GITA_MEMBERS).forEach(([name], idx) => {
             const val = (todayRow[idx] || '').trim();
             if (val === '➖' || val === '') unvoted.push(name.charAt(0).toUpperCase() + name.slice(1));
           });
@@ -454,8 +458,8 @@ app.get('/', (req, res) => {
       <div style="background:white;padding:20px;border-radius:10px;max-width:600px;margin:auto;">
         <h2>Spark Control Runner 24/7</h2>
         <p>Status: <b>${isConnected ? '✅ Connected' : '⏳ Awaiting Scan'}</b></p>
-        <p>Session Sync: <b>☁️ Google Drive Auto-Persist Enabled</b></p>
-        <p>Groups: <b>Gita (50), VSC (14), Vidya-Avidya, Spark</b></p>
+        <p>Session Storage: <b>☁️ Google Drive Auto-Persist Active</b></p>
+        <p>Gemini AI Assistant: <b>${geminiJid ? '✅ Active in WhatsApp' : '⏳ Create "Gemini" group'}</b></p>
         ${qrDataUrl ? `<img src="${qrDataUrl}" width="200"/>` : ''}
         <h3>Recent Logs:</h3>
         <ul>${logs.map(l => `<li>${l}</li>`).join('')}</ul>
