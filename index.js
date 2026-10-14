@@ -17,7 +17,7 @@ const VSC_SHEET_ID = process.env.VSC_ACADEMICS_SHEET_ID || "1b2zj-Fx8LPgtyGjM1vl
 let currentQR = null;
 let connectionStatus = 'Connecting...';
 let syncLogs = [];
-let botActive = true; // Emergency Stop Toggle
+let botActive = true;
 
 function logActivity(text) {
     const time = new Date().toLocaleTimeString('en-US', { timeZone: 'Asia/Kolkata' });
@@ -35,7 +35,7 @@ app.get('/', async (req, res) => {
                 <h1 style="color: ${botActive ? '#166534' : '#991B1B'};">
                     ${botActive ? '✅ Spark WhatsApp Runner is Active' : '🛑 Spark Runner is PAUSED (Emergency Stop)'}
                 </h1>
-                <p><b>Status:</b> ${botActive ? 'Running normally (Listening to polls & commands)' : 'All automated broadcasts and sheet syncs are halted.'}</p>
+                <p><b>Status:</b> ${botActive ? 'Running normally (Listening to polls & commands)' : 'All automated broadcasts and sheet syncs are paused.'}</p>
                 <p><b>Admin Commands:</b> <code>!stop</code> to pause | <code>!resume</code> to reactivate | <code>!poll gita</code> | <code>!poll vsc</code></p>
                 <h3>Live Execution Logs:</h3>
                 <ul style="background: #f4f4f5; padding: 20px 30px; border-radius: 8px; font-family: monospace; font-size: 13px;">${logHtml}</ul>
@@ -146,40 +146,50 @@ async function startBot() {
             return;
         }
 
-        if (!botActive) return; // If stopped, ignore remaining triggers
+        if (!botActive) return;
 
         // 2. Poll Dispatch Commands
-        if (text === '!poll gita') {
-            const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Asia/Kolkata' });
-            const pollMsg = await sock.sendMessage(chatJid, {
-                poll: {
-                    name: `${dateStr} - Gita Community Attendance`,
-                    values: ['Joined ✅', 'Absent ❌'],
-                    selectableCount: 1
-                }
-            });
-            logActivity(`Dispatched Gita Attendance Poll for ${dateStr}`);
-            // Pin the poll for 24 hours
+        if (text.toLowerCase() === '!poll gita') {
             try {
-                await sock.sendMessage(chatJid, { pin: pollMsg.key, type: 1, time: 86400 });
-                logActivity('Pinned attendance poll to chat header (24h).');
-            } catch (e) { console.log('Pinning notice:', e.message); }
+                const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: '2-digit', year: '2-digit', timeZone: 'Asia/Kolkata' });
+                logActivity(`Dispatching Gita Attendance Poll for ${dateStr}...`);
+                
+                await sock.sendMessage(chatJid, {
+                    poll: {
+                        name: `${dateStr} - Gita Community Attendance`,
+                        values: ['Joined ✅', 'Absent ❌'],
+                        selectableCount: 1
+                    }
+                });
+                logActivity('✅ Attendance poll dispatched successfully!');
+            } catch (err) {
+                logActivity(`Error sending poll: ${err.message}`);
+                await sock.sendMessage(chatJid, { text: `⚠️ Failed to send poll: ${err.message}` });
+            }
             return;
         }
 
-        if (text === '!poll vsc') {
-            const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
-            const template = `*${dateStr} ➖ Study Tracker* 📚\n\n1. Rohan -\n2. Swapnil -\n3. Anurag -\n4. Pooja -\n5. Saksham -\n6. Himanshu -\n7. Raghuvansh -\n8. Amit -\n9. Aman -\n10. Anisha -\n11. Sahiba -\n12. Sarita -\n13. Muskan -`;
-            await sock.sendMessage(chatJid, { text: template });
-            logActivity(`Dispatched VSC Study Tracker Template for ${dateStr}`);
+        if (text.toLowerCase() === '!poll vsc') {
+            try {
+                const dateStr = new Date().toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' });
+                const template = `*${dateStr} ➖ Study Tracker* 📚\n\n1. Rohan -\n2. Swapnil -\n3. Anurag -\n4. Pooja -\n5. Saksham -\n6. Himanshu -\n7. Raghuvansh -\n8. Amit -\n9. Aman -\n10. Anisha -\n11. Sahiba -\n12. Sarita -\n13. Muskan -`;
+                await sock.sendMessage(chatJid, { text: template });
+                logActivity(`Dispatched VSC Study Tracker Template for ${dateStr}`);
+            } catch (err) {
+                logActivity(`Error sending VSC template: ${err.message}`);
+            }
             return;
         }
 
         // 3. Status Report
-        if (text === '!status' || text === '!report') {
-            const rowData = (await sheetsApi(GITA_SHEET_ID, '/values/Attendance!E45:AZ45')).values?.[0] || [];
-            const summary = rowData[0] || 'No attendance logged yet for today.';
-            await sock.sendMessage(chatJid, { text: `📊 *Current Attendance Status:*\n${summary}\n\n*Bot Engine Status:* ${botActive ? 'Active ✅' : 'Paused 🛑'}` }, { quoted: msg });
+        if (text.toLowerCase() === '!status' || text.toLowerCase() === '!report') {
+            try {
+                const rowData = (await sheetsApi(GITA_SHEET_ID, '/values/Attendance!E45:AZ45')).values?.[0] || [];
+                const summary = rowData[0] || 'No attendance logged yet for today.';
+                await sock.sendMessage(chatJid, { text: `📊 *Current Attendance Status:*\n${summary}\n\n*Bot Engine Status:* ${botActive ? 'Active ✅' : 'Paused 🛑'}` }, { quoted: msg });
+            } catch (err) {
+                logActivity(`Error fetching status: ${err.message}`);
+            }
             return;
         }
 
