@@ -182,12 +182,12 @@ async function startBot() {
           }
         });
 
-        // Automatically pin the poll for 24 hours (86400 seconds)
+        // Automatically pin the poll for 24 hours
         try {
           await sock.sendMessage(remoteJid, {
             pin: {
-              type: 1,        // 1 to pin, 0 to unpin
-              time: 86400,    // 24 hours duration
+              type: 1,
+              time: 86400,
               key: pollMsg.key
             }
           });
@@ -201,66 +201,4 @@ async function startBot() {
       // Manual / Text Attendance Marking (e.g., "!mark Ankit present" or "!mark Anurag absent")
       const markMatch = text.match(/!mark\s+([a-zA-Z]+)\s+(present|absent|p|a)/i);
       if (markMatch) {
-        const name = markMatch[1].toLowerCase();
-        const status = markMatch[2].toLowerCase();
-        const symbol = (status === 'present' || status === 'p') ? '✅' : '❌';
-        const col = MEMBER_COLUMNS[name];
-
-        if (!col) {
-          await sock.sendMessage(remoteJid, { text: `⚠️ Member *${markMatch[1]}* not found in registered 47 roster.` });
-          continue;
-        }
-
-        // Target active row: Row 45 (13/10/26) in the "Attendance" tab
-        const targetRow = 45;
-        const cell = `Attendance!${col}${targetRow}`;
-
-        try {
-          await updateSheetCell(cell, symbol);
-          addLog(`Successfully marked ${markMatch[1]} as ${symbol} at ${cell} in live sheet.`);
-          await sock.sendMessage(remoteJid, { text: `✅ Recorded *${markMatch[1]}* as ${symbol} in live sheet at cell \`${cell}\`.` });
-        } catch (err) {
-          addLog(`Failed to update ${markMatch[1]}: ${err.message}`);
-          await sock.sendMessage(remoteJid, { text: `❌ Failed to update sheet: ${err.message}` });
-        }
-      }
-    }
-  });
-}
-
-startBot();
-
-// Dashboard UI
-app.get('/', (req, res) => {
-  res.send(`
-    <html>
-      <head>
-        <title>Spark WhatsApp Runner</title>
-        <meta http-equiv="refresh" content="10">
-        <style>
-          body { font-family: -apple-system, sans-serif; background: #f4f6f8; padding: 24px; }
-          .card { background: white; border-radius: 12px; padding: 24px; max-width: 720px; margin: 0 auto; box-shadow: 0 4px 12px rgba(0,0,0,0.06); }
-          .badge { padding: 6px 12px; border-radius: 6px; font-weight: bold; display: inline-block; }
-          .live { background: #e6f4ea; color: #137333; }
-          .waiting { background: #fef7e0; color: #b06000; }
-          ul { list-style: none; padding-left: 0; }
-          li { font-family: monospace; font-size: 13px; padding: 6px 0; border-bottom: 1px solid #eee; }
-        </style>
-      </head>
-      <body>
-        <div class="card">
-          <h2>Spark WhatsApp Runner 24/7</h2>
-          <p>Status: <span class="badge ${isConnected ? 'live' : 'waiting'}">${isConnected ? '✅ Live & Connected' : '⏳ Awaiting Scan'}</span></p>
-          ${isStopped ? '<p style="color:red;font-weight:bold;">🛑 EMERGENCY STOP ACTIVE</p>' : ''}
-          ${qrDataUrl ? `<div style="text-align:center;"><img src="${qrDataUrl}" width="250"/><p>Scan to link WhatsApp</p></div>` : ''}
-          <h3>Recent Live Sync Activity:</h3>
-          <ul>${logs.map(l => `<li>${l}</li>`).join('')}</ul>
-        </div>
-      </body>
-    </html>
-  `);
-});
-
-app.listen(PORT, () => {
-  addLog(`Web dashboard active on port ${PORT}`);
-});
+        const name =
