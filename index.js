@@ -13,9 +13,11 @@ const REFRESH_TOKEN = Buffer.from('MS8vMGd4dDlfYy1rMTRibkNnWUlBUkFBR0JBU053Ri1MO
 
 const GITA_SHEET_ID = '1rgF4V1wIZF_kJvbbmjgiDTOXPQckFvDmMzLN80dILuw';
 
-// Group IDs
+// Verified Group IDs
 const SPARK_JID = '120363431984658364@g.us';
 const GITA_JID = '120363406391193280@g.us';
+let vscJid = null;
+let vidyaJid = null;
 
 let qrDataUrl = '';
 let isConnected = false;
@@ -24,9 +26,9 @@ let logs = [];
 
 function addLog(msg) {
   const time = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
-  logs.unshift(`[${time}] ${msg}`);
-  if (logs.length > 40) logs.pop();
-  console.log(`[${time}] ${msg}`);
+  logs.unshift(`[${time}]${msg}`);
+  if (logs.length > 50) logs.pop();
+  console.log(`[${time}]${msg}`);
 }
 
 async function sendToSpark(sock, text) {
@@ -37,8 +39,21 @@ async function sendToSpark(sock, text) {
   }
 }
 
-// 50 Member Column Mapping (F to BC)
-const MEMBER_COLUMNS = {
+// Tag @all helper with mention highlight
+async function sendTagAll(sock, groupId, text) {
+  try {
+    const meta = await sock.groupMetadata(groupId);
+    await sock.sendMessage(groupId, {
+      text,
+      mentions: meta.participants.map(p => p.id)
+    });
+  } catch {
+    await sock.sendMessage(groupId, { text });
+  }
+}
+
+// 50 Member Column Mapping for CW Gita (F to BC)
+const GITA_MEMBERS = {
   'alok': 'F', 'aman': 'G', 'amit': 'H', 'anchal': 'I', 'anisha': 'J',
   'anjali': 'K', 'anju': 'L', 'ankit': 'M', 'anshu': 'N', 'anurag': 'O',
   'archana': 'P', 'ayush': 'Q', 'bhuwan': 'R', 'chhavi': 'S', 'deepa': 'T',
@@ -50,6 +65,13 @@ const MEMBER_COLUMNS = {
   'sarika': 'AT', 'sarita': 'AU', 'satwik': 'AV', 'shiv': 'AW', 'shivam': 'AX',
   'shubham': 'AY', 'shweta': 'AZ', 'swapnil': 'BA', 'utkarsh': 'BB', 'vikas': 'BC'
 };
+
+// 14 Students for VSC Academics
+const VSC_STUDENTS = [
+  'Rohan', 'Swapnil', 'Anurag', 'Pooja', 'Saksham',
+  'Himanshu', 'Raghuvansh', 'Amit', 'Aman', 'Anisha',
+  'Sahiba', 'Dipesh', 'Muskan', 'Sarita'
+];
 
 function getAccessToken() {
   return new Promise((resolve, reject) => {
@@ -75,7 +97,7 @@ function getAccessToken() {
   });
 }
 
-function updateSheetCell(range, value) {
+function updateSheet(range, value) {
   return new Promise(async (resolve, reject) => {
     try {
       const token = await getAccessToken();
@@ -100,6 +122,26 @@ function updateSheetCell(range, value) {
   });
 }
 
+const HELP_MENU = `⚡ *Spark 24/7 Command Console*
+
+Here are all active commands you can run anytime in this group:
+
+📊 *Polls & Attendance*
+• \`!poll gita\` — Dispatches Gita Attendance poll + @all tag to community
+• \`!poll framework\` — Dispatches Framework Availability poll + @all tag
+• \`!poll vidya\` — Dispatches Vidya–Avidya post-count poll + @all tag
+• \`!mark <name> <p/a>\` — Updates live Google Sheet directly (e.g., \`!mark Ankit p\`)
+
+📖 *VSC Academics*
+• \`!template vsc\` — Dispatches blank 14-student study tracker for yesterday (D-1)
+
+⚙️ *System & Safety Controls*
+• \`#start\` / \`!help\` — Restarts chat console & shows this command directory
+• \`!status\` — Checks runner health, uptime, and group bindings
+• \`!find groups\` — Lists all participating WhatsApp groups and their IDs
+• \`!stop\` — Emergency stop (pauses all bot activity)
+• \`!resume\` — Resumes all bot activity`;
+
 async function startBot() {
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
   const sock = makeWASocket({ auth: state, printQRInTerminal: false });
@@ -110,7 +152,18 @@ async function startBot() {
       isConnected = true;
       qrDataUrl = '';
       addLog('WhatsApp connected.');
-      await sendToSpark(sock, '⚡ *Spark Control Console Active (24/7)*\nRoster: 50 Members mapped (Col F to BC).');
+
+      // Auto-discover VSC and Vidya-Avidya groups
+      try {
+        const groups = await sock.groupFetchAllParticipating();
+        for (const [id, meta] of Object.entries(groups)) {
+          const name = (meta.subject || '').trim().toLowerCase();
+          if (name.includes('vsc academics')) { vscJid = id; addLog(`Found VSC Academics: ${id}`); }
+          if (name.includes('विद्या-अविद्या') || name.includes('vidya')) { vidyaJid = id; addLog(`Found Vidya-Avidya: ${id}`); }
+        }
+      } catch (e) { addLog(`Group scan error: ${e.message}`); }
+
+      await sendToSpark(sock, `⚡ *Spark Console Active (24/7)*\nType \`#start\` or \`!help\` anytime to see all commands.`);
     }
     if (connection === 'close') {
       isConnected = false;
@@ -122,17 +175,15 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  // Group Participant Join/Leave Monitor
+  // Group Participant Join/Leave Monitor (CW Gita)
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
     if (id !== GITA_JID) return;
     for (const p of participants) {
       const num = p.split('@')[0];
       if (action === 'add') {
-        await sendToSpark(sock, `👤 *New Member Added*: +${num} joined Gita Community.\nRemember to confirm their name to assign their sheet column.`);
-        addLog(`Member added: +${num}`);
+        await sendToSpark(sock, `👤 *New Member Added*: +${num} joined Gita Community.\nConfirm their name to assign their sheet column.`);
       } else if (action === 'remove') {
         await sendToSpark(sock, `⚠️ *Member Left/Removed*: +${num} left Gita Community.\nShould their column be removed from the sheet? (Reply to confirm or ignore to keep).`);
-        addLog(`Member left: +${num}`);
       }
     }
   });
@@ -146,59 +197,110 @@ async function startBot() {
       const fromJid = msg.key.remoteJid;
 
       if (!text) continue;
-      if (fromJid !== SPARK_JID) continue; // Strictly isolated to Spark group
 
-      if (text === '!stop') {
-        isStopped = true;
-        await sendToSpark(sock, '🛑 *Bot Stopped.* Paused until `!resume` is sent.');
+      // STRICT PRIVACY: Ignore everything outside Spark console
+      if (fromJid !== SPARK_JID) continue;
+
+      // #start & Command Directory
+      if (text.toLowerCase() === '#start' || text.toLowerCase() === '!start' || text.toLowerCase() === '!help' || text.toLowerCase() === '!menu') {
+        await sendToSpark(sock, HELP_MENU);
         continue;
       }
-      if (text === '!resume') {
-        isStopped = false;
-        await sendToSpark(sock, '▶️ *Bot Resumed.* Normal operations active.');
-        continue;
-      }
+
+      // Emergency Controls
+      if (text === '!stop') { isStopped = true; await sendToSpark(sock, '🛑 *Bot Stopped.* Automation paused.'); continue; }
+      if (text === '!resume') { isStopped = false; await sendToSpark(sock, '▶️ *Bot Resumed.* Normal operations active.'); continue; }
       if (isStopped) continue;
 
+      // Status Check
       if (text === '!status') {
-        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Roster: 50 members mapped\n• Target: Acharya Prashant Ji Gita Community`);
+        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Gita Community: Bound (50 members)\n• VSC Academics: ${vscJid ? 'Bound' : 'Searching...'}\n• Vidya-Avidya: ${vidyaJid ? 'Bound' : 'Searching...'}`);
         continue;
       }
 
-      // Gita Poll Dispatch
+      // Group Discovery
+      if (text === '!find groups' || text === '!groups') {
+        try {
+          const groups = await sock.groupFetchAllParticipating();
+          const list = Object.entries(groups).map(([id, g], i) => `${i + 1}. *${g.subject}*\n   ID: \`${id}\``).join('\n\n');
+          await sendToSpark(sock, `📋 *Connected Groups (${Object.keys(groups).length}):*\n\n${list}`);
+        } catch (e) { await sendToSpark(sock, `❌ Error: ${e.message}`); }
+        continue;
+      }
+
+      // 1. Gita Attendance Poll + @all tag
       if (text === '!poll gita') {
         const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' });
         await sock.sendMessage(GITA_JID, {
-          poll: {
-            name: `Gita Community Attendance — ${today}`,
-            values: ['Present ✅', 'Absent ❌'],
-            selectableCount: 1
-          }
+          poll: { name: `Gita Community Attendance — ${today}`, values: ['Present ✅', 'Absent ❌'], selectableCount: 1 }
         });
-        await sendToSpark(sock, `📊 *Gita Attendance Poll Dispatched* to community for ${today}.`);
+        await sendTagAll(sock, GITA_JID, '@all Please mark your attendance for today\'s session 🙏');
+        await sendToSpark(sock, `📊 *Gita Attendance Poll & @all tag dispatched* for ${today}.`);
         continue;
       }
 
-      // Manual Mark (e.g., "!mark Dipesh present")
+      // 2. Framework Availability Poll + @all tag
+      if (text === '!poll framework') {
+        const titles = [
+          'फ्रेमवर्क पर चर्चा करने के लिए आपकी उपलब्धता?',
+          'आज Framework discussion के लिए your availability?',
+          'Framework Session: आपकी उपलब्धता (Available slots)?'
+        ];
+        const randomTitle = titles[Math.floor(Math.random() * titles.length)];
+        await sock.sendMessage(GITA_JID, {
+          poll: {
+            name: randomTitle,
+            values: ['4-5 pm', '5-6 pm', '6-7 pm', '7-8 pm', '8-9 pm', '9-10 pm', '10-11 pm', '11-12 pm', 'Not available'],
+            selectableCount: 0 // Multi-select
+          }
+        });
+        await sendTagAll(sock, GITA_JID, '@all Please select your available time slots for the framework session 🙏');
+        await sendToSpark(sock, `🎯 *Framework Availability Poll & @all tag dispatched*:\n"${randomTitle}"`);
+        continue;
+      }
+
+      // 3. Vidya-Avidya Daily Share Poll + @all tag
+      if (text === '!poll vidya') {
+        if (!vidyaJid) { await sendToSpark(sock, '⚠️ Group CW विद्या-अविद्या not found yet. Run `!find groups`.'); continue; }
+        const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' });
+        const titles = [
+          `Today's share: Vidya–Avidya posts from the community (${today})`,
+          `आज समुदाय में विद्या–अविद्या posts का आपका योगदान? (${today})`,
+          `Community Share: Vidya–Avidya daily post count (${today})`
+        ];
+        const randomTitle = titles[Math.floor(Math.random() * titles.length)];
+        await sock.sendMessage(vidyaJid, {
+          poll: { name: randomTitle, values: ['0', '1', '2', '3', '3+'], selectableCount: 1 }
+        });
+        await sendTagAll(sock, vidyaJid, '@all Please respond with your post count for today 🙏');
+        await sendToSpark(sock, `🌱 *Vidya-Avidya Poll & @all tag dispatched*:\n"${randomTitle}"`);
+        continue;
+      }
+
+      // 4. VSC Academics Blank Study Tracker Dispatch (D-1)
+      if (text === '!template vsc') {
+        if (!vscJid) { await sendToSpark(sock, '⚠️ Group VSC Academics not found yet. Run `!find groups`.'); continue; }
+        const dMinusOne = new Date(Date.now() - 86400000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+        const rosterLines = VSC_STUDENTS.map((s, i) => `${i + 1}. ${s} - `).join('\n');
+        const template = `@all\n*${dMinusOne} — Study Tracker* 📚\n\n${rosterLines}`;
+        await sendTagAll(sock, vscJid, template);
+        await sendToSpark(sock, `📖 *VSC Daily Study Tracker Dispatched* to VSC Academics for ${dMinusOne}.`);
+        continue;
+      }
+
+      // 5. Manual Mark for Gita (e.g., "!mark Dipesh present")
       const markMatch = text.match(/!mark\s+([a-zA-Z]+)\s+(present|absent|p|a)/i);
       if (markMatch) {
         const name = markMatch[1].toLowerCase();
         const symbol = (markMatch[2].toLowerCase() === 'present' || markMatch[2].toLowerCase() === 'p') ? '✅' : '❌';
-        const col = MEMBER_COLUMNS[name];
+        const col = GITA_MEMBERS[name];
+        if (!col) { await sendToSpark(sock, `⚠️ Member *${markMatch[1]}* not found in 50-member roster.`); continue; }
 
-        if (!col) {
-          await sendToSpark(sock, `⚠️ Member *${markMatch[1]}* not found in 50-member roster.`);
-          continue;
-        }
-
-        const targetRow = 45; // Active row
-        const cell = `Attendance Register!${col}${targetRow}`;
+        const cell = `Attendance Register!${col}45`;
         try {
-          await updateSheetCell(cell, symbol);
+          await updateSheet(cell, symbol);
           await sendToSpark(sock, `✅ Marked *${markMatch[1]}* as ${symbol} at \`${cell}\`.`);
-        } catch (err) {
-          await sendToSpark(sock, `❌ Error updating sheet: ${err.message}`);
-        }
+        } catch (err) { await sendToSpark(sock, `❌ Error updating sheet: ${err.message}`); }
       }
     }
   });
@@ -214,8 +316,9 @@ app.get('/', (req, res) => {
       <div style="background:white;padding:20px;border-radius:10px;max-width:600px;margin:auto;">
         <h2>Spark Control Runner 24/7</h2>
         <p>Status: <b>${isConnected ? '✅ Connected' : '⏳ Awaiting Scan'}</b></p>
-        <p>Roster: <b>50 Members (F to BC)</b></p>
-        <p>Target: <b>Acharya Prashant Ji Gita Community</b></p>
+        <p>Gita Community: <b>✅ Bound (50 Members)</b></p>
+        <p>VSC Academics: <b>${vscJid ? '✅ Bound (14 Students)' : '⏳ Discovering...'}</b></p>
+        <p>Vidya-Avidya: <b>${vidyaJid ? '✅ Bound' : '⏳ Discovering...'}</b></p>
         ${qrDataUrl ? `<img src="${qrDataUrl}" width="200"/>` : ''}
         <h3>Recent Logs:</h3>
         <ul>${logs.map(l => `<li>${l}</li>`).join('')}</ul>
