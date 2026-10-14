@@ -32,6 +32,7 @@ let isConnected = false;
 let isPaused = false;
 let botStartTime = Date.now();
 let driveSaveTimeout = null;
+let workingModelName = null;
 
 // --- Express Web Dashboard & Health Pings ---
 const app = express();
@@ -46,7 +47,7 @@ app.get('/', async (req, res) => {
       <body style="font-family:sans-serif;text-align:center;padding:50px;background:#0d1117;color:#c9d1d9;">
         <h2 style="color:#2ea043;">✅ Spark WA Runner is Active & Connected</h2>
         <p>Uptime: ${Math.floor((Date.now() - botStartTime) / 60000)} minutes</p>
-        <p>Engine: Multi-Key Cloud Bundle | Free-Tier Flash AI Active</p>
+        <p>Active AI Model: ${workingModelName || 'Auto-Discovering Flash'}</p>
         <p style="margin-top:30px;"><a href="/reset" style="color:#f85149;text-decoration:none;font-size:12px;border:1px solid #f85149;padding:6px 12px;border-radius:6px;">⚠️ Reset Session & Generate Fresh QR</a></p>
       </body>
       </html>
@@ -247,7 +248,7 @@ function queueSaveBundle() {
   }, 3000);
 }
 
-// --- Gemini AI Engine (Strict Free-Tier Flash Priority) ---
+// --- Gemini AI Engine (Dynamic Flash Discovery) ---
 const SPARK_PERSONA_PROMPT = `
 You are Gemini Spark, a personal research assistant supporting Aman Jha (MBBS student at GSVM Medical College, Kanpur / ABVMU).
 Guidelines:
@@ -270,16 +271,37 @@ async function queryGemini(prompt, isSparkPersona = false) {
     ? `${systemInstruction}\n\nUser Question: ${prompt}`
     : prompt;
 
-  // Strict Flash models: 1,500 free requests/day (filters out Pro models that have limit: 0)
-  const candidateModels = [
-    'gemini-1.5-flash',
-    'gemini-1.5-flash-8b',
-    'gemini-1.5-flash-latest'
-  ];
+  let modelsToTry = [];
+  if (workingModelName) {
+    modelsToTry.push(workingModelName);
+  }
 
-  let lastErrorDetail = '';
+  // Fetch real model list enabled for this key from Google
+  try {
+    const listRes = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`);
+    const listData = await listRes.json();
+    if (listData.models && Array.isArray(listData.models)) {
+      const valid = listData.models
+        .filter(m => m.supportedGenerationMethods && m.supportedGenerationMethods.includes('generateContent'))
+        .map(m => m.name.replace('models/', ''));
 
-  for (const model of candidateModels) {
+      // Filter for Flash models (filters out Pro models that have limit: 0 on free tier)
+      const flashModels = valid.filter(m => m.toLowerCase().includes('flash'));
+      const otherModels = valid.filter(m => !m.toLowerCase().includes('flash') && !m.toLowerCase().includes('pro'));
+
+      modelsToTry = Array.from(new Set([...modelsToTry, ...flashModels, ...otherModels, ...valid]));
+    }
+  } catch (err) {
+    console.error('[Gemini] ListModels error:', err.message);
+  }
+
+  if (modelsToTry.length === 0) {
+    modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash-001', 'gemini-1.5-flash-002', 'gemini-1.5-flash'];
+  }
+
+  const errors = [];
+
+  for (const model of modelsToTry) {
     try {
       const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
       const res = await fetch(endpoint, {
@@ -297,22 +319,19 @@ async function queryGemini(prompt, isSparkPersona = false) {
       const data = await res.json();
 
       if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
+        workingModelName = model; // Cache working model
         return data.candidates[0].content.parts[0].text.trim();
       }
 
       if (data.error) {
-        lastErrorDetail = `${data.error.message} (${model})`;
-        console.error(`[Gemini ${model} Error]`, data.error);
-        // If this Flash model failed with quota, loop falls back to the next Flash model
-      } else if (data.candidates && data.candidates[0]?.finishReason) {
-        lastErrorDetail = `Generation stopped: ${data.candidates[0].finishReason}`;
+        errors.push(`${model}: ${data.error.message.slice(0, 120)}`);
       }
-    } catch (networkErr) {
-      lastErrorDetail = networkErr.message;
+    } catch (netErr) {
+      errors.push(`${model}: ${netErr.message}`);
     }
   }
 
-  return `⚠️ AI Error: ${lastErrorDetail}`;
+  return `⚠️ AI Error (Quota/Model):\n${errors.slice(0, 2).join('\n')}`;
 }
 
 // Unboxes standard, ephemeral (disappearing), and media messages
@@ -458,7 +477,6 @@ async function startWhatsAppBot() {
 
       // 3. Dedicated Gemini Group (Auto-reply with Spark Persona)
       if (isGroup && groupSubject === 'gemini') {
-        // Prevent bot from replying to its own responses
         if (isMe && (text.startsWith('⚡') || text.startsWith('⚠️'))) continue;
         const aiReply = await queryGemini(text, true);
         await sock.sendMessage(remoteJid, { text: aiReply }, { quoted: msg });
