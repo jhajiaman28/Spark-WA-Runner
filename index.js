@@ -5,11 +5,13 @@ import qrcode from 'qrcode';
 const app = express();
 const PORT = process.env.PORT || 10000;
 
+// Verified WhatsApp Group IDs
+const SPARK_JID = '120363431984658364@g.us';          // Private Console
+const GITA_JID = '120363406391193280@g.us';           // Acharya Prashant Ji Gita Community strictly
+
 let qrDataUrl = '';
 let isConnected = false;
 let isStopped = false;
-let sparkJid = null;
-let gitaJid = null;
 let logs = [];
 
 function addLog(msg) {
@@ -20,10 +22,10 @@ function addLog(msg) {
 }
 
 async function sendToSpark(sock, text) {
-  if (sparkJid) {
-    await sock.sendMessage(sparkJid, { text });
-  } else {
-    addLog(`Spark group not found yet. Message: ${text}`);
+  try {
+    await sock.sendMessage(SPARK_JID, { text });
+  } catch (err) {
+    addLog(`Error sending to Spark: ${err.message}`);
   }
 }
 
@@ -37,30 +39,7 @@ async function startBot() {
       isConnected = true;
       qrDataUrl = '';
       addLog('WhatsApp connected.');
-
-      // Find Spark and Gita groups automatically
-      try {
-        const groups = await sock.groupFetchAllParticipating();
-        for (const [id, meta] of Object.entries(groups)) {
-          const name = (meta.subject || '').trim();
-          if (name.toLowerCase() === 'spark') {
-            sparkJid = id;
-            addLog(`Found Spark console group: ${id}`);
-          }
-          if (name.toLowerCase().includes('gita community')) {
-            gitaJid = id;
-            addLog(`Found Gita group: ${name} (${id})`);
-          }
-        }
-
-        if (sparkJid) {
-          await sock.sendMessage(sparkJid, {
-            text: '⚡ *Spark Control Console Active (24/7)*\nRunner is live. All alerts and reports will appear here.'
-          });
-        }
-      } catch (err) {
-        addLog(`Error finding groups: ${err.message}`);
-      }
+      await sendToSpark(sock, '⚡ *Spark Control Console Active (24/7)*\nTarget: Acharya Prashant Ji Gita Community\nAll other groups and personal chats are ignored.');
     }
     if (connection === 'close') {
       isConnected = false;
@@ -81,8 +60,9 @@ async function startBot() {
 
       if (!text) continue;
 
-      // Only listen to commands in Spark group or starting with '!'
-      if (fromJid !== sparkJid && !text.startsWith('!')) continue;
+      // STRICT PRIVACY: Ignore everything outside the Spark console group
+      // (Automatically ignores "CHAT", "YOU" / Message Yourself, DMs, and other groups)
+      if (fromJid !== SPARK_JID) continue;
 
       // 1. Emergency Controls
       if (text === '!stop') {
@@ -101,18 +81,14 @@ async function startBot() {
 
       // 2. Status Check
       if (text === '!status') {
-        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Spark Console: ${sparkJid ? 'Connected' : 'Searching...'}\n• Gita Group: ${gitaJid ? 'Detected' : 'Not detected'}`);
+        await sendToSpark(sock, '✅ *Status: Active 24/7*\n• Console: Spark Group\n• Target: Acharya Prashant Ji Gita Community');
         continue;
       }
 
       // 3. List Gita Members to Spark
       if (text === '!list gita') {
-        if (!gitaJid) {
-          await sendToSpark(sock, '⚠️ Gita Community group not found yet.');
-          continue;
-        }
         try {
-          const meta = await sock.groupMetadata(gitaJid);
+          const meta = await sock.groupMetadata(GITA_JID);
           const members = meta.participants.map((p, i) => `${i + 1}. +${p.id.split('@')[0]}`).join('\n');
           await sendToSpark(sock, `📋 *${meta.subject} Members (${meta.participants.length}):*\n\n${members}`);
           addLog(`Sent member list (${meta.participants.length}) to Spark group.`);
@@ -134,7 +110,8 @@ app.get('/', (req, res) => {
       <div style="background:white;padding:20px;border-radius:10px;max-width:600px;margin:auto;">
         <h2>Spark Control Runner 24/7</h2>
         <p>Status: <b>${isConnected ? '✅ Connected' : '⏳ Awaiting Scan'}</b></p>
-        <p>Spark Group: <b>${sparkJid ? '✅ Bound' : '⏳ Locating...'}</b></p>
+        <p>Spark Console: <b>✅ Bound</b></p>
+        <p>Target: <b>Acharya Prashant Ji Gita Community</b></p>
         ${qrDataUrl ? `<img src="${qrDataUrl}" width="200"/>` : ''}
         <h3>Recent Logs:</h3>
         <ul>${logs.map(l => `<li>${l}</li>`).join('')}</ul>
