@@ -171,17 +171,30 @@ async function startBot() {
         continue;
       }
 
-      // Gita Attendance Poll Dispatch
+      // Gita Attendance Poll Dispatch & Auto-Pin
       if (text.toLowerCase() === '!poll gita' || text.toLowerCase() === 'poll gita') {
         const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' });
-        await sock.sendMessage(remoteJid, {
+        const pollMsg = await sock.sendMessage(remoteJid, {
           poll: {
             name: `Gita Community Attendance — ${today}`,
             values: ['Present ✅', 'Absent ❌'],
             selectableCount: 1
           }
         });
-        addLog(`Sent Gita attendance poll to ${remoteJid}`);
+
+        // Automatically pin the poll for 24 hours (86400 seconds)
+        try {
+          await sock.sendMessage(remoteJid, {
+            pin: {
+              type: 1,        // 1 to pin, 0 to unpin
+              time: 86400,    // 24 hours duration
+              key: pollMsg.key
+            }
+          });
+          addLog(`Sent & pinned Gita attendance poll in ${remoteJid}`);
+        } catch (pinErr) {
+          addLog(`Poll sent, but pinning failed: ${pinErr.message}`);
+        }
         continue;
       }
 
