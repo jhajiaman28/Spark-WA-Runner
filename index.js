@@ -2,6 +2,7 @@ import makeWASocket, { useMultiFileAuthState, DisconnectReason } from '@whiskeys
 import express from 'express';
 import qrcode from 'qrcode';
 import https from 'https';
+import fs from 'fs';
 
 const app = express();
 const PORT = process.env.PORT || 10000;
@@ -12,12 +13,13 @@ const CLIENT_SECRET = Buffer.from('R09DU1BYLVpaeFlIenJmSmd2djJzTTc0cW5OWi1xRkt2M
 const REFRESH_TOKEN = Buffer.from('MS8vMGd4dDlfYy1rMTRibkNnWUlBUkFBR0JBU053Ri1MOUlybFdFNEJiMzc2b2FVLXRucTBvZExUeU9xTi1pek9TemdvUTFrR3NmTmY3S2VVd1RQajVFX1gxNkJHcm4yYUpyNWRBOA==', 'base64').toString('utf-8');
 
 const GITA_SHEET_ID = '1rgF4V1wIZF_kJvbbmjgiDTOXPQckFvDmMzLN80dILuw';
+const VSC_SHEET_ID = '1b2zj-Fx8LPgtyGjM1vlw6Vf8BZ-aFUf4uwUAIGFf4VY';
 
 // Verified Group IDs
 const SPARK_JID = '120363431984658364@g.us';
 const GITA_JID = '120363406391193280@g.us';
-let vscJid = null;
-let vidyaJid = null;
+const VSC_JID = '120363425711044492@g.us';
+const VIDYA_JID = '120363427315951484@g.us';
 
 let qrDataUrl = '';
 let isConnected = false;
@@ -26,9 +28,9 @@ let logs = [];
 
 function addLog(msg) {
   const time = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
-  logs.unshift(`[${time}]${msg}`);
+  logs.unshift(`[${time}] ${msg}`);
   if (logs.length > 50) logs.pop();
-  console.log(`[${time}]${msg}`);
+  console.log(`[${time}] ${msg}`);
 }
 
 async function sendToSpark(sock, text) {
@@ -39,7 +41,6 @@ async function sendToSpark(sock, text) {
   }
 }
 
-// Tag @all helper with mention highlight
 async function sendTagAll(sock, groupId, text) {
   try {
     const meta = await sock.groupMetadata(groupId);
@@ -97,14 +98,100 @@ function getAccessToken() {
   });
 }
 
-function updateSheet(range, value) {
+// Drive Session Storage: Eliminates QR scanning on redeploy
+async function restoreSessionFromDrive() {
+  try {
+    const token = await getAccessToken();
+    const searchRes = await new Promise((resolve, reject) => {
+      https.get(`https://www.googleapis.com/drive/v3/files?q=name='spark_baileys_creds.json'+and+trashed=false`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }, (res) => {
+        let d = ''; res.on('data', c => d += c);
+        res.on('end', () => resolve(JSON.parse(d)));
+      }).on('error', reject);
+    });
+
+    if (searchRes.files && searchRes.files.length > 0) {
+      const fileId = searchRes.files[0].id;
+      const credsData = await new Promise((resolve, reject) => {
+        https.get(`https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`, {
+          headers: { Authorization: `Bearer ${token}` }
+        }, (res) => {
+          let d = ''; res.on('data', c => d += c);
+          res.on('end', () => resolve(d));
+        }).on('error', reject);
+      });
+
+      if (!fs.existsSync('auth_info')) fs.mkdirSync('auth_info', { recursive: true });
+      fs.writeFileSync('auth_info/creds.json', credsData);
+      addLog('☁️ Auto-restored session from Google Drive! No QR scan needed.');
+      return true;
+    }
+  } catch (err) {
+    addLog(`Session restore note: ${err.message}`);
+  }
+  return false;
+}
+
+async function saveSessionToDrive() {
+  try {
+    if (!fs.existsSync('auth_info/creds.json')) return;
+    const credsData = fs.readFileSync('auth_info/creds.json', 'utf-8');
+    const token = await getAccessToken();
+
+    const searchRes = await new Promise((resolve, reject) => {
+      https.get(`https://www.googleapis.com/drive/v3/files?q=name='spark_baileys_creds.json'+and+trashed=false`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }, (res) => {
+        let d = ''; res.on('data', c => d += c);
+        res.on('end', () => resolve(JSON.parse(d)));
+      }).on('error', reject);
+    });
+
+    if (searchRes.files && searchRes.files.length > 0) {
+      const req = https.request({
+        hostname: 'www.googleapis.com',
+        path: `/upload/drive/v3/files/${searchRes.files[0].id}?uploadType=media`,
+        method: 'PATCH',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
+      }, () => {});
+      req.write(credsData);
+      req.end();
+    } else {
+      const boundary = '-------314159265358979323846';
+      const metadata = JSON.stringify({ name: 'spark_baileys_creds.json', mimeType: 'application/json' });
+      const multipartBody = 
+        `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${metadata}\r\n` +
+        `--${boundary}\r\nContent-Type: application/json\r\n\r\n${credsData}\r\n` +
+        `--${boundary}--`;
+
+      const req = https.request({
+        hostname: 'www.googleapis.com',
+        path: '/upload/drive/v3/files?uploadType=multipart',
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`,
+          'Content-Length': Buffer.byteLength(multipartBody)
+        }
+      }, () => {});
+      req.write(multipartBody);
+      req.end();
+    }
+    addLog('☁️ Session credentials safely synced to Google Drive.');
+  } catch (err) {
+    addLog(`Session backup note: ${err.message}`);
+  }
+}
+
+function updateSheet(sheetId, range, value) {
   return new Promise(async (resolve, reject) => {
     try {
       const token = await getAccessToken();
       const body = JSON.stringify({ values: [[value]] });
       const req = https.request({
         hostname: 'sheets.googleapis.com',
-        path: `/v4/spreadsheets/${GITA_SHEET_ID}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
+        path: `/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}?valueInputOption=USER_ENTERED`,
         method: 'PUT',
         headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
       }, (res) => {
@@ -122,15 +209,31 @@ function updateSheet(range, value) {
   });
 }
 
+function readSheet(sheetId, range) {
+  return new Promise(async (resolve, reject) => {
+    try {
+      const token = await getAccessToken();
+      https.get(`https://sheets.googleapis.com/v4/spreadsheets/${sheetId}/values/${encodeURIComponent(range)}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      }, (res) => {
+        let d = ''; res.on('data', c => d += c);
+        res.on('end', () => resolve(JSON.parse(d).values || []));
+      }).on('error', reject);
+    } catch (err) { reject(err); }
+  });
+}
+
 const HELP_MENU = `⚡ *Spark 24/7 Command Console*
 
 Here are all active commands you can run anytime in this group:
 
-📊 *Polls & Attendance*
+📊 *Polls & Reminders*
 • \`!poll gita\` — Dispatches Gita Attendance poll + @all tag to community
 • \`!poll framework\` — Dispatches Framework Availability poll + @all tag
 • \`!poll vidya\` — Dispatches Vidya–Avidya post-count poll + @all tag
-• \`!mark <name> <p/a>\` — Updates live Google Sheet directly (e.g., \`!mark Ankit p\`)
+• \`!remind gita\` — Scans sheet & tags ONLY members who haven't voted (➖)
+• \`!remind vsc\` — Scans tracker & tags ONLY students with blank study logs
+• \`!mark <name> <p/a>\` — Manual attendance override (e.g. \`!mark Ankit p\`)
 
 📖 *VSC Academics*
 • \`!template vsc\` — Dispatches blank 14-student study tracker for yesterday (D-1)
@@ -143,6 +246,7 @@ Here are all active commands you can run anytime in this group:
 • \`!resume\` — Resumes all bot activity`;
 
 async function startBot() {
+  await restoreSessionFromDrive();
   const { state, saveCreds } = await useMultiFileAuthState('auth_info');
   const sock = makeWASocket({ auth: state, printQRInTerminal: false });
 
@@ -152,18 +256,8 @@ async function startBot() {
       isConnected = true;
       qrDataUrl = '';
       addLog('WhatsApp connected.');
-
-      // Auto-discover VSC and Vidya-Avidya groups
-      try {
-        const groups = await sock.groupFetchAllParticipating();
-        for (const [id, meta] of Object.entries(groups)) {
-          const name = (meta.subject || '').trim().toLowerCase();
-          if (name.includes('vsc academics')) { vscJid = id; addLog(`Found VSC Academics: ${id}`); }
-          if (name.includes('विद्या-अविद्या') || name.includes('vidya')) { vidyaJid = id; addLog(`Found Vidya-Avidya: ${id}`); }
-        }
-      } catch (e) { addLog(`Group scan error: ${e.message}`); }
-
-      await sendToSpark(sock, `⚡ *Spark Console Active (24/7)*\nType \`#start\` or \`!help\` anytime to see all commands.`);
+      await saveSessionToDrive();
+      await sendToSpark(sock, '⚡ *Spark Console Active (24/7)*\nType `#start` or `!help` anytime to view all commands.');
     }
     if (connection === 'close') {
       isConnected = false;
@@ -173,7 +267,10 @@ async function startBot() {
     }
   });
 
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', async () => {
+    await saveCreds();
+    await saveSessionToDrive();
+  });
 
   // Group Participant Join/Leave Monitor (CW Gita)
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
@@ -198,6 +295,29 @@ async function startBot() {
 
       if (!text) continue;
 
+      // Handle VSC Academics Student Tracker Messages (Updates live sheet)
+      if (fromJid === VSC_JID && !text.startsWith('!')) {
+        for (let i = 0; i < VSC_STUDENTS.length; i++) {
+          const student = VSC_STUDENTS[i];
+          const regex = new RegExp(`(?:^|\\n)\\s*\\d*\\.?\\s*${student}\\s*[-–:]?\\s*(.*)`, 'i');
+          const m = text.match(regex);
+          if (m && m[1] && m[1].trim()) {
+            const updateText = m[1].trim();
+            addLog(`VSC Update for ${student}: ${updateText}`);
+            // Target Row 22 + i (Week 2); Col E (Wednesday) or Col D (Tuesday)
+            const targetRow = 22 + i;
+            const targetCol = 'E';
+            try {
+              await updateSheet(VSC_SHEET_ID, `Academics!${targetCol}${targetRow}`, updateText.startsWith('✅') ? updateText : `✅ ${updateText}`);
+              await sendToSpark(sock, `📖 *VSC Synced to Sheet*: *${student}* (Row ${targetRow}) - ${updateText}`);
+            } catch (e) {
+              addLog(`VSC sheet update error: ${e.message}`);
+            }
+          }
+        }
+        continue;
+      }
+
       // STRICT PRIVACY: Ignore everything outside Spark console
       if (fromJid !== SPARK_JID) continue;
 
@@ -214,17 +334,7 @@ async function startBot() {
 
       // Status Check
       if (text === '!status') {
-        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Gita Community: Bound (50 members)\n• VSC Academics: ${vscJid ? 'Bound' : 'Searching...'}\n• Vidya-Avidya: ${vidyaJid ? 'Bound' : 'Searching...'}`);
-        continue;
-      }
-
-      // Group Discovery
-      if (text === '!find groups' || text === '!groups') {
-        try {
-          const groups = await sock.groupFetchAllParticipating();
-          const list = Object.entries(groups).map(([id, g], i) => `${i + 1}. *${g.subject}*\n   ID: \`${id}\``).join('\n\n');
-          await sendToSpark(sock, `📋 *Connected Groups (${Object.keys(groups).length}):*\n\n${list}`);
-        } catch (e) { await sendToSpark(sock, `❌ Error: ${e.message}`); }
+        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Gita Community: Bound\n• VSC Academics: Bound\n• Vidya-Avidya: Bound\n• Cloud Session: Synced to Google Drive`);
         continue;
       }
 
@@ -239,7 +349,29 @@ async function startBot() {
         continue;
       }
 
-      // 2. Framework Availability Poll + @all tag
+      // 2. Tag ONLY Unvoted Members in Gita Community
+      if (text === '!remind gita') {
+        try {
+          const rows = await readSheet(GITA_SHEET_ID, 'Attendance Register!F45:BC45');
+          const todayRow = rows[0] || [];
+          const unvoted = [];
+          Object.entries(GITA_MEMBERS).forEach(([name, col], idx) => {
+            const val = (todayRow[idx] || '').trim();
+            if (val === '➖' || val === '') unvoted.push(name.charAt(0).toUpperCase() + name.slice(1));
+          });
+
+          if (unvoted.length === 0) {
+            await sendToSpark(sock, '🎉 Everyone has already voted for today!');
+          } else {
+            const reminderText = `@all Unvoted Members:\n${unvoted.join(', ')}\n\nPlease mark your attendance for today's session 🙏`;
+            await sock.sendMessage(GITA_JID, { text: reminderText });
+            await sendToSpark(sock, `🔔 *Tagged ${unvoted.length} Unvoted Members in Gita Community*:\n${unvoted.join(', ')}`);
+          }
+        } catch (e) { await sendToSpark(sock, `❌ Error reminding Gita: ${e.message}`); }
+        continue;
+      }
+
+      // 3. Framework Availability Poll + @all tag
       if (text === '!poll framework') {
         const titles = [
           'फ्रेमवर्क पर चर्चा करने के लिए आपकी उपलब्धता?',
@@ -251,7 +383,7 @@ async function startBot() {
           poll: {
             name: randomTitle,
             values: ['4-5 pm', '5-6 pm', '6-7 pm', '7-8 pm', '8-9 pm', '9-10 pm', '10-11 pm', '11-12 pm', 'Not available'],
-            selectableCount: 0 // Multi-select
+            selectableCount: 0
           }
         });
         await sendTagAll(sock, GITA_JID, '@all Please select your available time slots for the framework session 🙏');
@@ -259,9 +391,8 @@ async function startBot() {
         continue;
       }
 
-      // 3. Vidya-Avidya Daily Share Poll + @all tag
+      // 4. Vidya-Avidya Daily Share Poll + @all tag
       if (text === '!poll vidya') {
-        if (!vidyaJid) { await sendToSpark(sock, '⚠️ Group CW विद्या-अविद्या not found yet. Run `!find groups`.'); continue; }
         const today = new Date().toLocaleDateString('en-GB', { timeZone: 'Asia/Kolkata' });
         const titles = [
           `Today's share: Vidya–Avidya posts from the community (${today})`,
@@ -269,26 +400,33 @@ async function startBot() {
           `Community Share: Vidya–Avidya daily post count (${today})`
         ];
         const randomTitle = titles[Math.floor(Math.random() * titles.length)];
-        await sock.sendMessage(vidyaJid, {
+        await sock.sendMessage(VIDYA_JID, {
           poll: { name: randomTitle, values: ['0', '1', '2', '3', '3+'], selectableCount: 1 }
         });
-        await sendTagAll(sock, vidyaJid, '@all Please respond with your post count for today 🙏');
+        await sendTagAll(sock, VIDYA_JID, '@all Please respond with your post count for today 🙏');
         await sendToSpark(sock, `🌱 *Vidya-Avidya Poll & @all tag dispatched*:\n"${randomTitle}"`);
         continue;
       }
 
-      // 4. VSC Academics Blank Study Tracker Dispatch (D-1)
+      // 5. VSC Academics Blank Study Tracker Dispatch (D-1)
       if (text === '!template vsc') {
-        if (!vscJid) { await sendToSpark(sock, '⚠️ Group VSC Academics not found yet. Run `!find groups`.'); continue; }
         const dMinusOne = new Date(Date.now() - 86400000).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
         const rosterLines = VSC_STUDENTS.map((s, i) => `${i + 1}. ${s} - `).join('\n');
         const template = `@all\n*${dMinusOne} — Study Tracker* 📚\n\n${rosterLines}`;
-        await sendTagAll(sock, vscJid, template);
+        await sendTagAll(sock, VSC_JID, template);
         await sendToSpark(sock, `📖 *VSC Daily Study Tracker Dispatched* to VSC Academics for ${dMinusOne}.`);
         continue;
       }
 
-      // 5. Manual Mark for Gita (e.g., "!mark Dipesh present")
+      // 6. Tag Pending Students in VSC Academics
+      if (text === '!remind vsc') {
+        const reminderText = `@all Pending Students: Please update what you studied yesterday 🙏`;
+        await sendTagAll(sock, VSC_JID, reminderText);
+        await sendToSpark(sock, `🔔 *Sent Study Reminder Tag to VSC Academics*`);
+        continue;
+      }
+
+      // 7. Manual Mark for Gita (e.g., "!mark Dipesh present")
       const markMatch = text.match(/!mark\s+([a-zA-Z]+)\s+(present|absent|p|a)/i);
       if (markMatch) {
         const name = markMatch[1].toLowerCase();
@@ -298,7 +436,7 @@ async function startBot() {
 
         const cell = `Attendance Register!${col}45`;
         try {
-          await updateSheet(cell, symbol);
+          await updateSheet(GITA_SHEET_ID, cell, symbol);
           await sendToSpark(sock, `✅ Marked *${markMatch[1]}* as ${symbol} at \`${cell}\`.`);
         } catch (err) { await sendToSpark(sock, `❌ Error updating sheet: ${err.message}`); }
       }
@@ -316,9 +454,8 @@ app.get('/', (req, res) => {
       <div style="background:white;padding:20px;border-radius:10px;max-width:600px;margin:auto;">
         <h2>Spark Control Runner 24/7</h2>
         <p>Status: <b>${isConnected ? '✅ Connected' : '⏳ Awaiting Scan'}</b></p>
-        <p>Gita Community: <b>✅ Bound (50 Members)</b></p>
-        <p>VSC Academics: <b>${vscJid ? '✅ Bound (14 Students)' : '⏳ Discovering...'}</b></p>
-        <p>Vidya-Avidya: <b>${vidyaJid ? '✅ Bound' : '⏳ Discovering...'}</b></p>
+        <p>Session Sync: <b>☁️ Google Drive Auto-Persist Enabled</b></p>
+        <p>Groups: <b>Gita (50), VSC (14), Vidya-Avidya, Spark</b></p>
         ${qrDataUrl ? `<img src="${qrDataUrl}" width="200"/>` : ''}
         <h3>Recent Logs:</h3>
         <ul>${logs.map(l => `<li>${l}</li>`).join('')}</ul>
