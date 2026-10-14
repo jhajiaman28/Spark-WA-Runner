@@ -21,11 +21,23 @@ const GITA_JID = '120363406391193280@g.us';
 const VSC_JID = '120363425711044492@g.us';
 const VIDYA_JID = '120363427315951484@g.us';
 let geminiJid = null;
+let chatGroupJid = null;
 
+const botSentIds = new Set();
 let qrDataUrl = '';
 let isConnected = false;
 let isStopped = false;
 let logs = [];
+
+// System Instructions
+const SPARK_INSTRUCTIONS = `You are Gemini Spark, personal research assistant and peer collaborator to Aman Jha, an MBBS First Year student at GSVM Medical College (ABVMU), Kanpur / Lucknow, Uttar Pradesh.
+Operating guidelines:
+- Act as a supportive, grounded, and capable peer collaborator. Keep responses warm, direct, concise, and structured.
+- Context: MBBS 1st Year medical studies, Bhagavad Gita and Vedanta philosophy, community outreach, and academic tracking.
+- AP Framework guidelines: Never use Latin transliteration "Bhog" (use "Consumption" or "भोग"). Keep spaces between symbols like "— *" and "— _".
+- Provide clinical accuracy, high clarity, and concise practical explanations without fluff.`;
+
+const GENERAL_INSTRUCTIONS = `You are an intelligent, versatile, and helpful AI assistant powered by Gemini. You accurately, concisely, and helpfully execute any prompt, question, explanation, translation, writing, analysis, or coding task directly.`;
 
 function addLog(msg) {
   const time = new Date().toLocaleTimeString('en-IN', { timeZone: 'Asia/Kolkata' });
@@ -48,14 +60,12 @@ async function sendTagAll(sock, groupId, text) {
 }
 
 // Gemini AI Call
-function askGemini(prompt) {
+function askGemini(prompt, systemInstruction = GENERAL_INSTRUCTIONS) {
   return new Promise((resolve, reject) => {
     if (!GEMINI_KEY) return reject(new Error('GEMINI_API_KEY environment variable not found on Render.'));
     const payload = JSON.stringify({
       contents: [{ parts: [{ text: prompt }] }],
-      systemInstruction: {
-        parts: [{ text: "You are Gemini Spark, an MBBS peer collaborator and personal assistant to Aman Jha at GSVM Medical College, Kanpur. Keep responses warm, direct, structured, concise, and helpful." }]
-      }
+      systemInstruction: { parts: [{ text: systemInstruction }] }
     });
 
     const req = https.request({
@@ -240,9 +250,14 @@ const VSC_STUDENTS = [
 
 const HELP_MENU = `⚡ *Spark 24/7 Command Console*
 
-Here are all active commands you can run in this group:
+Here are all active commands:
 
-📊 *Polls & Reminders*
+🤖 *Universal AI Assistant (Any Chat / Group / DM)*
+• \`!ask <prompt>\` — General AI for any question, task, translation, code or writing!
+• \`!ask spark <prompt>\` — Personalized AI loaded with **@gemini-spark-instructions** (MBBS curriculum, AP framework, Gita/Vedanta, clinical precision).
+• Send any message directly into the **Gemini** group.
+
+📊 *Polls & Reminders (Spark Group Only)*
 • \`!poll gita\` — Dispatches Gita Attendance poll + @all tag
 • \`!poll framework\` — Dispatches Framework Availability poll + @all tag
 • \`!poll vidya\` — Dispatches Vidya–Avidya post-count poll + @all tag
@@ -250,11 +265,8 @@ Here are all active commands you can run in this group:
 • \`!remind vsc\` — Tags students who haven't updated their study log
 • \`!mark <name> <p/a>\` — Manual attendance override (e.g. \`!mark Ankit p\`)
 
-📖 *VSC Academics*
+📖 *VSC Academics (Spark Group Only)*
 • \`!template vsc\` — Dispatches blank 14-student study tracker for yesterday (D-1)
-
-🤖 *Personal AI Assistant*
-• Send any message to the **Gemini** group to chat with AI directly in WhatsApp!
 
 ⚙️ *System Controls*
 • \`#start\` / \`!help\` — Shows this directory
@@ -274,18 +286,16 @@ async function startBot() {
       addLog('WhatsApp connected.');
       await saveSessionToDrive();
 
-      // Discover Gemini group
       try {
         const groups = await sock.groupFetchAllParticipating();
         for (const [id, meta] of Object.entries(groups)) {
-          if ((meta.subject || '').trim().toLowerCase() === 'gemini') {
-            geminiJid = id;
-            addLog(`Found Gemini AI group: ${id}`);
-          }
+          const s = (meta.subject || '').trim().toLowerCase();
+          if (s === 'gemini') { geminiJid = id; addLog(`Found Gemini group: ${id}`); }
+          if (s === 'chat') { chatGroupJid = id; addLog(`Found CHAT group to exclude: ${id}`); }
         }
       } catch (e) {}
 
-      await sendToSpark(sock, `⚡ *Spark Console Active (24/7)*\n• AI Chat Group: ${geminiJid ? 'Bound' : 'Create a group named "Gemini"'}\nType \`#start\` for commands.`);
+      await sendToSpark(sock, `⚡ *Spark Console Active (24/7)*\n• Universal AI: \`!ask\` and \`!ask spark\` active everywhere\n• Excluded: "CHAT" group and (You) personal chat\nType \`#start\` for commands.`);
     }
     if (connection === 'close') {
       isConnected = false;
@@ -304,25 +314,91 @@ async function startBot() {
     if (type !== 'notify') return;
     for (const msg of messages) {
       if (!msg.message) continue;
+      const msgId = msg.key.id;
+
+      if (botSentIds.has(msgId)) {
+        botSentIds.delete(msgId);
+        continue;
+      }
+
       const text = (msg.message.conversation || msg.message.extendedTextMessage?.text || '').trim();
       const fromJid = msg.key.remoteJid;
 
       if (!text) continue;
 
-      // 1. DEDICATED GEMINI AI GROUP CHAT (Direct WhatsApp AI Assistant)
-      if (geminiJid && fromJid === geminiJid) {
+      // STRICT EXCLUSIONS: Ignore (You) personal chat & group named "CHAT"
+      const myJid = sock.user?.id ? (sock.user.id.split(':')[0] + '@s.whatsapp.net') : null;
+      const myLid = sock.user?.lid || null;
+      if (fromJid === myJid || (myLid && fromJid === myLid)) continue;
+      if (chatGroupJid && fromJid === chatGroupJid) continue;
+
+      // On-the-fly check for group subject "chat" or "gemini"
+      if (fromJid.endsWith('@g.us')) {
         try {
-          await sock.sendPresenceUpdate('composing', geminiJid);
-          const aiResponse = await askGemini(text);
-          await sock.sendMessage(geminiJid, { text: aiResponse });
-          addLog(`Replied to Gemini prompt: "${text.slice(0, 30)}..."`);
-        } catch (err) {
-          await sock.sendMessage(geminiJid, { text: `⚠️ AI Assistant Error: ${err.message}` });
+          const meta = await sock.groupMetadata(fromJid);
+          const s = (meta.subject || '').trim().toLowerCase();
+          if (s === 'chat') {
+            chatGroupJid = fromJid;
+            continue;
+          }
+          if (s === 'gemini') {
+            geminiJid = fromJid;
+          }
+        } catch (e) {}
+      }
+
+      // 1. UNIVERSAL AI: "!ask spark <prompt>" (Loaded with @gemini-spark-instructions)
+      if (text.toLowerCase().startsWith('!ask spark ')) {
+        const prompt = text.slice(11).trim();
+        if (prompt) {
+          try {
+            await sock.sendPresenceUpdate('composing', fromJid);
+            const aiReply = await askGemini(prompt, SPARK_INSTRUCTIONS);
+            const sent = await sock.sendMessage(fromJid, { text: aiReply }, { quoted: msg });
+            botSentIds.add(sent.key.id);
+            addLog(`Answered !ask spark in ${fromJid}`);
+          } catch (e) {
+            const errSent = await sock.sendMessage(fromJid, { text: `⚠️ AI Error: ${e.message}` }, { quoted: msg });
+            botSentIds.add(errSent.key.id);
+          }
         }
         continue;
       }
 
-      // STRICT PRIVACY: Ignore everything outside Spark console
+      // 2. UNIVERSAL AI: "!ask <prompt>" (General versatile assistant)
+      if (text.startsWith('!ask ')) {
+        const prompt = text.slice(5).trim();
+        if (prompt) {
+          try {
+            await sock.sendPresenceUpdate('composing', fromJid);
+            const aiReply = await askGemini(prompt, GENERAL_INSTRUCTIONS);
+            const sent = await sock.sendMessage(fromJid, { text: aiReply }, { quoted: msg });
+            botSentIds.add(sent.key.id);
+            addLog(`Answered !ask in ${fromJid}`);
+          } catch (e) {
+            const errSent = await sock.sendMessage(fromJid, { text: `⚠️ AI Error: ${e.message}` }, { quoted: msg });
+            botSentIds.add(errSent.key.id);
+          }
+        }
+        continue;
+      }
+
+      // 3. Dedicated Gemini Group (Chat naturally without typing any prefix)
+      if (geminiJid && fromJid === geminiJid) {
+        try {
+          await sock.sendPresenceUpdate('composing', geminiJid);
+          const aiResponse = await askGemini(text, SPARK_INSTRUCTIONS);
+          const sent = await sock.sendMessage(geminiJid, { text: aiResponse });
+          botSentIds.add(sent.key.id);
+          addLog(`Replied in Gemini group using @gemini-spark-instructions.`);
+        } catch (err) {
+          const errSent = await sock.sendMessage(geminiJid, { text: `⚠️ AI Error: ${err.message}` });
+          botSentIds.add(errSent.key.id);
+        }
+        continue;
+      }
+
+      // STRICT ISOLATION FOR ADMIN COMMANDS: Only accepted in Spark console
       if (fromJid !== SPARK_JID) continue;
 
       // #start & Command Directory
@@ -332,13 +408,13 @@ async function startBot() {
       }
 
       // Emergency Controls
-      if (text === '!stop') { isStopped = true; await sendToSpark(sock, '🛑 *Bot Stopped.*'); continue; }
-      if (text === '!resume') { isStopped = false; await sendToSpark(sock, '▶️ *Bot Resumed.*'); continue; }
+      if (text === '!stop') { isStopped = true; await sendToSpark(sock, '🛑 *Bot Stopped.* Automation paused.'); continue; }
+      if (text === '!resume') { isStopped = false; await sendToSpark(sock, '▶️ *Bot Resumed.* Normal operations active.'); continue; }
       if (isStopped) continue;
 
       // Status Check
       if (text === '!status') {
-        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Gita Community: Bound\n• VSC Academics: Bound\n• Vidya-Avidya: Bound\n• Gemini AI Group: ${geminiJid ? 'Bound' : 'Not detected'}\n• Session Storage: Google Drive Synced`);
+        await sendToSpark(sock, `✅ *Status: Active 24/7*\n• Gita Community: Bound\n• VSC Academics: Bound\n• Vidya-Avidya: Bound\n• Gemini AI Group: ${geminiJid ? 'Bound (@gemini-spark-instructions)' : 'Ready'}\n• Universal AI: Enabled globally (\`!ask\` and \`!ask spark\`)\n• Excluded: "CHAT" group and (You) personal chat\n• Google Drive Session: Synced`);
         continue;
       }
 
@@ -458,8 +534,9 @@ app.get('/', (req, res) => {
       <div style="background:white;padding:20px;border-radius:10px;max-width:600px;margin:auto;">
         <h2>Spark Control Runner 24/7</h2>
         <p>Status: <b>${isConnected ? '✅ Connected' : '⏳ Awaiting Scan'}</b></p>
+        <p>Universal AI: <b>✅ \`!ask\` and \`!ask spark\` active everywhere</b></p>
+        <p>Exclusions: <b>Strictly ignores "CHAT" group and (You) personal chat</b></p>
         <p>Session Storage: <b>☁️ Google Drive Auto-Persist Active</b></p>
-        <p>Gemini AI Assistant: <b>${geminiJid ? '✅ Active in WhatsApp' : '⏳ Create "Gemini" group'}</b></p>
         ${qrDataUrl ? `<img src="${qrDataUrl}" width="200"/>` : ''}
         <h3>Recent Logs:</h3>
         <ul>${logs.map(l => `<li>${l}</li>`).join('')}</ul>
