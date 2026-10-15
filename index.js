@@ -23,9 +23,26 @@ const GOOGLE = {
 let sock = null, currentQR = null, isConnected = false, isPaused = false;
 let botStartTime = Date.now(), driveTimeout = null;
 
-// Persistent Group-to-Sheet Mappings: { "groupJid": { "sheetId": "...", "tab": "...", "notify": false } }
+// Persistent Group-to-Sheet Mappings: { "groupJid": { "sheetId": "...", "tab": "...", "notify": false, "name": "..." } }
 let groupMappings = fs.existsSync(MAPPINGS_FILE) ? JSON.parse(fs.readFileSync(MAPPINGS_FILE, 'utf8')) : {};
 const saveMappings = () => fs.writeFileSync(MAPPINGS_FILE, JSON.stringify(groupMappings, null, 2));
+
+// --- Smart Group Name to JID Resolver ---
+async function resolveGroup(input) {
+  if (!input) return null;
+  if (input.endsWith('@g.us')) return { id: input, name: groupMappings[input]?.name || input };
+  try {
+    const groups = await sock.groupFetchAllParticipating();
+    const q = input.toLowerCase().trim();
+    // 1. Exact match on subject
+    const exact = Object.values(groups).find(g => (g.subject || '').toLowerCase() === q);
+    if (exact) return { id: exact.id, name: exact.subject };
+    // 2. Partial substring match
+    const partial = Object.values(groups).find(g => (g.subject || '').toLowerCase().includes(q));
+    if (partial) return { id: partial.id, name: partial.subject };
+  } catch (_) {}
+  return null;
+}
 
 // --- Google Drive Session Sync & Sheets API ---
 async function getAccessToken() {
@@ -140,10 +157,10 @@ async function startBot() {
     }
   });
 
-  // --- 1. Real-Time Join/Leave Listener (Default: 100% Silent) ---
+  // --- Real-Time Join/Leave Listener (Default: 100% Silent) ---
   sock.ev.on('group-participants.update', async ({ id, participants, action }) => {
     if (isPaused || !groupMappings[id]) return;
-    const { sheetId, tab, notify } = groupMappings[id];
+    const { sheetId, tab, notify, name: gName } = groupMappings[id];
     const now = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kolkata' });
 
     for (const jid of participants) {
@@ -151,21 +168,19 @@ async function startBot() {
       if (action === 'add') {
         const name = (await sock.onWhatsApp(jid))?.[0]?.pushName || 'New Member';
         await sheetsAppendRow(sheetId, tab, [name, phone, now, 'Active']);
-        // Only sends alert if explicitly set to ON for this group
         if (notify === true) {
-          await sock.sendMessage(SPARK_CONSOLE_JID, { text: `➕ *Member Added*\n• Group: \`${id}\`\n• Tab: *${tab}*\n• Name: *${name}* (${phone})` });
+          await sock.sendMessage(SPARK_CONSOLE_JID, { text: `➕ *Member Added*\n• Group: *${gName || id}*\n• Tab: *${tab}*\n• Name: *${name}* (${phone})` });
         }
       } else if (action === 'remove') {
         await sheetsUpdateMemberStatus(sheetId, tab, phone, `Left (${now})`);
-        // Only sends alert if explicitly set to ON for this group
         if (notify === true) {
-          await sock.sendMessage(SPARK_CONSOLE_JID, { text: `➖ *Member Left/Removed*\n• Group: \`${id}\`\n• Tab: *${tab}*\n• Phone: *${phone}*` });
+          await sock.sendMessage(SPARK_CONSOLE_JID, { text: `➖ *Member Left/Removed*\n• Group: *${gName || id}*\n• Tab: *${tab}*\n• Phone: *${phone}*` });
         }
       }
     }
   });
 
-  // --- 2. Interactive Command Controller ---
+  // --- Command Controller ---
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
 
@@ -178,63 +193,85 @@ async function startBot() {
       const args = text.split(/\s+/);
       const cmd = args[0].toLowerCase();
 
-      // !find groups — Lists all groups with JIDs
+      // !start / !help — Interactive Command Guide
+      if (cmd === '!start' || cmd === '!help') {
+        const helpMsg =
+          `⚡ *Spark Roster & Sheet Sync Engine*\n*───────────────────*\n\n` +
+          `📋 *Group Discovery:*\n` +
+          `• \`!find groups\` — List all groups with member counts\n\n` +
+          `🔗 *Sheet Mapping & Sync (Use names or JIDs):*\n` +
+          `• \`!map <name/jid> <tab_name> [sheet_id]\` — Bind group to a sheet tab\n` +
+          `  _Example:_ \`!map Gita CW_Roster\`\n` +
+          `• \`!sync <name/jid>\` — Pull all current members into the sheet\n` +
+          `  _Example:_ \`!sync Gita\`\n` +
+          `• \`!tracked\` — View active mappings & alert statuses\n\n` +
+          `🔕 *Notification Controls (Silent by Default):*\n` +
+          `• \`!notify <name/jid> on\` — Turn alerts ON for a group\n` +
+          `• \`!notify <name/jid> off\` — Turn alerts OFF for a group\n\n` +
+          `⚙️ *System Controls:*\n` +
+          `• \`!status\` — Check runner health & tracked counts\n` +
+          `• \`!stop\` / \`!resume\` — Pause or resume automatic sync`;
+        await sock.sendMessage(remoteJid, { text: helpMsg }, { quoted: msg });
+        continue;
+      }
+
+      // !find groups
       if (cmd === '!find' && args[1]?.toLowerCase() === 'groups' || cmd === '!groups') {
         const groups = await sock.groupFetchAllParticipating();
         let reply = `📋 *All WhatsApp Groups (${Object.keys(groups).length})*\n*───────────────────*\n\n`;
-        Object.values(groups).forEach((g, i) => {
-          reply += `${i + 1}. *${g.subject}*\n   • *JID:* \`${g.id}\`\n   • *Members:* ${g.participants?.length || 0}\n\n`;
+        Object.values(groups).sort((a,b)=>(a.subject||'').localeCompare(b.subject||'')).forEach((g, i) => {
+          reply += `${i + 1}. *${g.subject}*\n   • *Name Query:* \`${g.subject.split(/\s+/)[0]}\`\n   • *JID:* \`${g.id}\`\n   • *Members:* ${g.participants?.length || 0}\n\n`;
         });
         await sock.sendMessage(remoteJid, { text: reply }, { quoted: msg });
         continue;
       }
 
-      // !map <group_jid> <tab_name> [sheet_id] (Default: notify=false)
+      // !map <name_or_jid> <tab_name> [sheet_id]
       if (cmd === '!map') {
-        const groupJid = args[1];
+        const target = await resolveGroup(args[1]);
         const tab = args[2];
         const sheetId = args[3] || DEFAULT_SHEET_ID;
 
-        if (!groupJid || !tab) {
-          await sock.sendMessage(remoteJid, { text: '⚠️ *Usage:* `!map <group_jid> <tab_name> [sheet_id]`' }, { quoted: msg });
+        if (!target || !tab) {
+          await sock.sendMessage(remoteJid, { text: '⚠️ *Usage:* `!map <group_name_or_jid> <tab_name> [sheet_id]`\n_Example:_ `!map Gita CW_Roster`' }, { quoted: msg });
           continue;
         }
 
-        groupMappings[groupJid] = { sheetId, tab, notify: false };
+        groupMappings[target.id] = { sheetId, tab, notify: false, name: target.name };
         saveMappings();
-        await sock.sendMessage(remoteJid, { text: `✅ *Mapped Successfully!*\n• Group: \`${groupJid}\`\n• Tab: *${tab}*\n• Sheet ID: \`${sheetId}\`\n• Alerts: *OFF (Silent)*` }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: `✅ *Mapped Successfully!*\n• Group: *${target.name}* (\`${target.id}\`)\n• Tab: *${tab}*\n• Sheet ID: \`${sheetId}\`\n• Alerts: *OFF (Silent)*` }, { quoted: msg });
         continue;
       }
 
-      // !notify <group_jid> on/off — Toggles alert for any specific group
+      // !notify <name_or_jid> on/off
       if (cmd === '!notify') {
-        const groupJid = args[1];
+        const target = await resolveGroup(args[1]);
         const state = args[2]?.toLowerCase();
 
-        if (!groupJid || !groupMappings[groupJid] || !['on', 'off'].includes(state)) {
-          await sock.sendMessage(remoteJid, { text: '⚠️ *Usage:* `!notify <group_jid> on` or `!notify <group_jid> off`' }, { quoted: msg });
+        if (!target || !groupMappings[target.id] || !['on', 'off'].includes(state)) {
+          await sock.sendMessage(remoteJid, { text: '⚠️ *Usage:* `!notify <group_name_or_jid> on` or `off`' }, { quoted: msg });
           continue;
         }
 
-        groupMappings[groupJid].notify = (state === 'on');
+        groupMappings[target.id].notify = (state === 'on');
         saveMappings();
-        await sock.sendMessage(remoteJid, { text: `🔔 *Notification Updated!*\n• Group: \`${groupJid}\`\n• Alerts: *${state === 'on' ? 'ON' : 'OFF (Silent)'}*` }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: `🔔 *Notification Updated!*\n• Group: *${target.name}*\n• Alerts: *${state === 'on' ? 'ON' : 'OFF (Silent)'}*` }, { quoted: msg });
         continue;
       }
 
-      // !sync <group_jid> — Dumps current members into mapped sheet
+      // !sync <name_or_jid>
       if (cmd === '!sync') {
-        const groupJid = args[1];
-        if (!groupJid || !groupMappings[groupJid]) {
-          await sock.sendMessage(remoteJid, { text: `⚠️ Group not mapped. Use \`!map ${groupJid || '<group_jid>'} <tab_name>\` first.` }, { quoted: msg });
+        const target = await resolveGroup(args[1]);
+        if (!target || !groupMappings[target.id]) {
+          await sock.sendMessage(remoteJid, { text: `⚠️ Group not mapped. Use \`!map ${args[1] || '<name>'} <tab_name>\` first.` }, { quoted: msg });
           continue;
         }
 
-        const { sheetId, tab } = groupMappings[groupJid];
-        const groupMeta = await sock.groupMetadata(groupJid);
+        const { sheetId, tab } = groupMappings[target.id];
+        const groupMeta = await sock.groupMetadata(target.id);
         const now = new Date().toLocaleString('en-GB', { timeZone: 'Asia/Kolkata' });
 
-        await sock.sendMessage(remoteJid, { text: `⏳ Syncing ${groupMeta.participants.length} members to tab *${tab}*...` }, { quoted: msg });
+        await sock.sendMessage(remoteJid, { text: `⏳ Syncing ${groupMeta.participants.length} members from *${target.name}* to tab *${tab}*...` }, { quoted: msg });
         for (const p of groupMeta.participants) {
           const phone = p.id.split('@')[0];
           const role = p.admin ? (p.admin === 'superadmin' ? 'Creator' : 'Admin') : 'Member';
@@ -244,11 +281,11 @@ async function startBot() {
         continue;
       }
 
-      // !tracked — View active mappings and notification states
+      // !tracked
       if (cmd === '!tracked' || cmd === '!mappings') {
         let reply = `📌 *Active Group Trackers*\n*───────────────────*\n\n`;
         for (const [jid, data] of Object.entries(groupMappings)) {
-          reply += `• *Group:* \`${jid}\`\n  ➔ *Tab:* *${data.tab}*\n  ➔ *Alerts:* *${data.notify ? '🔔 ON' : '🔕 OFF (Silent)'}*\n\n`;
+          reply += `• *Group:* *${data.name || jid}*\n  ➔ *Tab:* *${data.tab}*\n  ➔ *Alerts:* *${data.notify ? '🔔 ON' : '🔕 OFF (Silent)'}*\n\n`;
         }
         await sock.sendMessage(remoteJid, { text: Object.keys(groupMappings).length ? reply : 'No groups currently mapped.' }, { quoted: msg });
         continue;
